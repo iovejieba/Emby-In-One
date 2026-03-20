@@ -52,6 +52,14 @@ class EmbyClient {
     this.name = serverConfig.name;
     this.baseUrl = serverConfig.url;
     this.streamBaseUrl = serverConfig.streamingUrl || this.baseUrl;
+
+    // Validate baseUrl protocol to prevent SSRF
+    for (const url of [this.baseUrl, this.streamBaseUrl]) {
+      const parsed = new URL(url);
+      if (!['http:', 'https:'].includes(parsed.protocol)) {
+        throw new Error(`Invalid upstream protocol: ${parsed.protocol}`);
+      }
+    }
     this.accessToken = serverConfig.apiKey || null;
     this.userId = null;
     this.online = false;
@@ -96,6 +104,16 @@ class EmbyClient {
     }
 
     this.http = axios.create(axiosConfig);
+  }
+
+  /**
+   * Validate that a path is relative (prevents SSRF by absolute URL injection).
+   */
+  _validatePath(path) {
+    if (typeof path !== 'string') throw new Error('Invalid path');
+    if (/^https?:\/\//i.test(path) || path.startsWith('//')) {
+      throw new Error('Absolute URLs not allowed');
+    }
   }
 
   /**
@@ -281,6 +299,7 @@ class EmbyClient {
    * Make an authenticated request to this upstream server.
    */
   async request(method, path, { params, data, headers: extraHeaders, timeout, signal } = {}) {
+    this._validatePath(path);
     const headers = this._buildRequestHeaders(extraHeaders);
 
     const resp = await this.http.request({
@@ -300,6 +319,7 @@ class EmbyClient {
    * Get a readable stream from the upstream server (for media/image proxying).
    */
   async getStream(path, { params, headers: extraHeaders, timeout } = {}) {
+    this._validatePath(path);
     const headers = this._buildRequestHeaders(extraHeaders);
     delete headers['host'];
     delete headers['accept-encoding'];

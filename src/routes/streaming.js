@@ -96,7 +96,7 @@ function createStreamingRoutes(config, idManager, upstreamManager) {
       logger.debug(`Stream headers for [${actualClient.name}]: ${JSON.stringify(streamHeaders)}`);
       // Attach proxy base URL and token so proxyStream can rewrite HLS manifest URLs
       req._proxyBase = `http://localhost:${config.server.port}`;
-      req._proxyToken = req.query.api_key || req.proxyToken || '';
+      req._proxyToken = req.proxyToken || req.query.api_key || '';
       await proxyStream(upstreamUrl, actualClient.accessToken, req, res, streamHeaders);
     } catch (err) {
       logger.error(`Stream error for ${req.path}: ${err.message}`);

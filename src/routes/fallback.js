@@ -111,7 +111,10 @@ function createFallbackRoutes(config, authManager, idManager, upstreamManager) {
         const status = err.response.status;
         const data = err.response.data;
         logger.debug(`Fallback upstream error: ${status} for ${req.method} ${req.path}`);
-        return res.status(status).send(data);
+        if (data && typeof data === 'object') {
+          return res.status(status).json(data);
+        }
+        return res.status(status).type('text/plain').send(typeof data === 'string' ? data : String(data ?? ''));
       }
 
       logger.error(`Fallback error: ${req.method} ${req.path} - ${err.message}`);

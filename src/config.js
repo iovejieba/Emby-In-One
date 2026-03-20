@@ -75,8 +75,12 @@ function loadConfig() {
 }
 
 function normalizeUpstream(s, index, config) {
-  s.url = (s.url || '').replace(/\/+$/, '');
-  s.streamingUrl = s.streamingUrl ? s.streamingUrl.replace(/\/+$/, '') : null;
+  s.url = (s.url || '');
+  while (s.url.endsWith('/')) s.url = s.url.slice(0, -1);
+  s.streamingUrl = s.streamingUrl || null;
+  if (s.streamingUrl) {
+    while (s.streamingUrl.endsWith('/')) s.streamingUrl = s.streamingUrl.slice(0, -1);
+  }
   s.name = s.name || `Server ${index + 1}`;
   s.playbackMode = s.playbackMode || config.playback?.mode || 'proxy';
   s.spoofClient = s.spoofClient || 'none';

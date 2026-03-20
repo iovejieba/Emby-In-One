@@ -41,9 +41,9 @@ function createAuthMiddleware(authManager) {
       if (userInfo) {
         req.proxyUser = userInfo;
         req.proxyToken = token;
-        logger.debug(`Auth OK via ${tokenSource}: ${token.substring(0, 8)}... path=${req.path}`);
+        logger.debug(`Auth OK via ${tokenSource} path=${req.path}`);
       } else {
-        logger.debug(`Token invalid via ${tokenSource}: ${token.substring(0, 8)}... path=${req.path}`);
+        logger.debug(`Token invalid via ${tokenSource} path=${req.path}`);
       }
     }
 

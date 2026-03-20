@@ -1,14 +1,24 @@
 const { Router } = require('express');
+const rateLimit = require('express-rate-limit');
 const { requireAuth } = require('../middleware/auth-middleware');
 const { rewriteResponseIds } = require('../utils/id-rewriter');
 const capturedHeaders = require('../utils/captured-headers');
 const logger = require('../utils/logger');
 
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  skipSuccessfulRequests: true,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: 'Too many login attempts, please try again later' },
+});
+
 function createUserRoutes(config, authManager, idManager, upstreamManager) {
   const router = Router();
 
   // POST /Users/AuthenticateByName
-  router.post('/Users/AuthenticateByName', (req, res) => {
+  router.post('/Users/AuthenticateByName', loginLimiter, (req, res) => {
     const { Username, Pw, Password } = req.body;
     const password = Pw || Password || '';
 

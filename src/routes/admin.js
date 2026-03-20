@@ -1,6 +1,7 @@
 const { Router } = require('express');
 const { v4: uuidv4 } = require('uuid');
 const fs = require('fs');
+const rateLimit = require('express-rate-limit');
 const { requireAuth } = require('../middleware/auth-middleware');
 const { saveConfig, normalizeUpstream } = require('../config');
 const { EmbyClient } = require('../emby-client');
@@ -8,11 +9,20 @@ const logger = require('../utils/logger');
 const { getLogFilePath } = require('../utils/logger');
 const capturedHeaders = require('../utils/captured-headers');
 
+const adminLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests' },
+});
+
 function createAdminRoutes(config, idManager, upstreamManager) {
   const router = Router();
 
   // All admin routes require auth
   router.use(requireAuth);
+  router.use(adminLimiter);
 
   // ========== Dashboard ==========
 
