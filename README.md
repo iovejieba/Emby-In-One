@@ -4,6 +4,13 @@
 
 多台 Emby 服务器聚合代理，将多个上游 Emby 服务器的媒体库合并为一个统一入口，支持任何标准 Emby 客户端访问。
 
+## 测试站点
+
+[演示站点](https://emby.cothx.eu.cc/)
+Emby连接地址：https://emby.cothx.eu.cc/
+账号：admin
+密码：5T5xF4oMxcnrcCPA
+
 ## 预览
 
 ![预览图1](https://cdn.nodeimage.com/i/D293pIQcFNx4gXkfskPbnXFzmgCQ1JPx.webp)
