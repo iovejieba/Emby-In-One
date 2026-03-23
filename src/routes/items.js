@@ -38,6 +38,13 @@ function createItemRoutes(config, authManager, idManager, upstreamManager) {
     );
     clearTimeout(tId);
 
+    for (let i = 0; i < results.length; i++) {
+      if (results[i].status === 'rejected') {
+        const client = onlineClients[i];
+        logger.warn(`[${client.name}] ${pathBuilder(client)} failed: ${results[i].reason?.message || 'unknown'}`);
+      }
+    }
+
     const successResults = results
       .filter(r => r.status === 'fulfilled')
       .map(r => r.value);
@@ -186,6 +193,13 @@ function createItemRoutes(config, authManager, idManager, upstreamManager) {
         })
       );
       clearTimeout(tId);
+
+      for (let i = 0; i < results.length; i++) {
+        if (results[i].status === 'rejected') {
+          const client = onlineClients[i];
+          logger.warn(`[${client.name}] Items/Latest failed: ${results[i].reason?.message || 'unknown'}`);
+        }
+      }
 
       const allItems = [];
       for (const r of results) {

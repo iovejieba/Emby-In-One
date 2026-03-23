@@ -199,6 +199,10 @@ else
   info "配置文件已存在，跳过生成"
   ADMIN_USER=$(grep 'username:' "${PROJECT_DIR}/config/config.yaml" | head -1 | awk '{print $2}' | tr -d '"')
   ADMIN_PASS=$(grep 'password:' "${PROJECT_DIR}/config/config.yaml" | head -1 | awk '{print $2}' | tr -d '"')
+  # 密码已被哈希，无法还原显示
+  if echo "$ADMIN_PASS" | grep -q ':'; then
+    ADMIN_PASS="(已加密，使用上次设置的密码登录。如需重置: docker exec -it emby-in-one node src/index.js --reset-password 新密码)"
+  fi
 fi
 
 # ── 8. 设置权限 ──

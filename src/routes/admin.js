@@ -93,7 +93,7 @@ function createAdminRoutes(config, idManager, upstreamManager, authManager) {
   router.get('/api/upstream', (req, res) => {
     const list = config.upstream.map((s, index) => {
       let safeUrl = s.url;
-      try { const u = new URL(s.url); u.username = ''; u.password = ''; safeUrl = u.toString(); } catch {}
+      try { const u = new URL(s.url); safeUrl = u.origin + u.pathname + u.search; } catch {}
       return {
         index,
         name: s.name,

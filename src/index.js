@@ -1,12 +1,32 @@
 const { loadConfig } = require('./config');
 const logger = require('./utils/logger');
 const { setDataDir } = require('./utils/logger');
+const capturedHeaders = require('./utils/captured-headers');
 
 async function main() {
+  // 密码重置 CLI
+  const args = process.argv.slice(2);
+  const resetIdx = args.indexOf('--reset-password');
+  if (resetIdx !== -1) {
+    const newPass = args[resetIdx + 1];
+    if (!newPass) {
+      console.error('Usage: node src/index.js --reset-password <new-password>');
+      process.exit(1);
+    }
+    const config = loadConfig();
+    const { hashPassword } = require('./auth');
+    const { saveConfig } = require('./config');
+    config.admin.password = hashPassword(newPass);
+    saveConfig(config);
+    console.log('Admin password has been reset successfully.');
+    process.exit(0);
+  }
+
   logger.info('Emby-in-One starting...');
 
   const config = loadConfig();
   setDataDir(config.dataDir);
+  capturedHeaders.init(config.dataDir);
   logger.info(`Loaded config: ${config.upstream.length} upstream server(s)`);
 
   // These will be filled in as we implement each module

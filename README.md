@@ -1,6 +1,6 @@
 # Emby-In-One
 
-> **Version: V1.2** 我讨厌Codex，又有Bug，管理员密码在后端输出为Hush值，请暂且使用Release V1.0等待修复
+> **Version: V1.2**
 
 [English](README_EN.md) | [更新日志](Update.md) | [更新计划](Update%20Plan.md) | [GitHub](https://github.com/ArizeSky/Emby-In-One)
 
@@ -29,7 +29,7 @@ Emby连接地址：https://emby.cothx.eu.cc/
 - **多服务器聚合** — 将多台 Emby 服务器的媒体库、搜索结果、元数据合并展示
 - **智能去重** — **仅作用于搜索功能**：搜索时相同影片（基于 TMDB ID 或 标题+年份）自动合并，保留多版本 MediaSource 可选播放；在媒体库页面中点击某个库，数据直接来自该库所属的上游服务器，不做跨库合并
 - **系列级观看历史隔离** — 搜索结果中的剧集仍可跨服务器聚合展示，但进入某个剧集后的 `Resume` / `NextUp` 会优先使用该搜索结果所属的主实例；仅当主实例没有有效结果时才顺序回退到同剧的其他实例，不再把多个服务器的观看进度混合显示
-- **客户端透传 (Passthrough)** — 将真实客户端身份（UA、设备信息）按代理 Token 隔离透传给上游服务器，避免多设备串用同一份客户端身份
+- **客户端透传 (Passthrough)** — 将真实客户端身份（UA、设备信息）按代理 Token 隔离透传给上游服务器，避免多设备串用同一份客户端身份；成功登录的客户端身份按服务器维度持久化，重启后无需重新登录
 - **UA 伪装** — 支持伪装为 Infuse、Emby Web 官方客户端
 - **双播放模式** — 代理模式（流量经代理转发，HLS 清单重写为相对代理路径）/ 直连模式（302 重定向到上游）
 - **网络代理池** — 每台上游服务器可独立配置 HTTP/HTTPS 代理
@@ -99,7 +99,7 @@ server:
 
 admin:
   username: "admin"
-  password: "your-strong-password"
+  password: "your-strong-password"    # 首次启动后自动加密存储
 
 playback:
   mode: "proxy"
@@ -164,7 +164,7 @@ server:
 
 admin:
   username: "admin"
-  password: "your-strong-password"
+  password: "your-strong-password"    # 首次启动后自动加密存储
 
 playback:
   mode: "proxy"          # "proxy" 或 "redirect"，全局默认值
@@ -241,15 +241,17 @@ upstream:
 
 ### Passthrough 模式工作原理
 
-Passthrough 使用三级 header 解析：
+Passthrough 使用五级 header 解析：
 
-1. **实时请求头** — 如果当前请求来自真实 Emby 客户端（检测到 `X-Emby-Client` 头），直接通过 `AsyncLocalStorage` 使用这些头。
+1. **实时请求头** — 如果当前请求携带 `X-Emby-Client` 头（真正的 Emby 客户端），直接通过 `AsyncLocalStorage` 使用这些头。
 2. **当前 Token 的已捕获头** — 当真实客户端（Infuse、Emby iOS 等）登录 Emby-in-One 时，代理会按当前代理 Token 捕获并存储客户端的 `User-Agent`、`X-Emby-Client`、`X-Emby-Device-Name` 等头信息；后续仅由同一 Token 的请求复用。
-3. **Infuse 兜底** — 如果没有可用的真实客户端头（如刚启动时），使用 Infuse 身份作为安全默认值。
+3. **该服务器上次成功的登录头** — 每台 passthrough 服务器成功登录时，使用的完整 headers 会被记住并持久化到 `data/captured-headers.json`。重启后直接使用，无需等待用户重新登录。
+4. **最近捕获头** — 如果当前请求无 Token 且该服务器无历史成功记录，使用最近一次任意 Token 的已捕获头。
+5. **Infuse 兜底** — 如果没有任何已捕获的客户端头（如全新安装首次启动），使用 Infuse 身份作为安全默认值。
 
 捕获的头会叠加在 Infuse 基础 profile 之上，所以即使客户端没有发送所有 Emby 头字段（如某些第三方 App），也能呈现完整的客户端身份。
 
-当客户端登录时，所有离线的 passthrough 服务器会自动使用新捕获的头重新尝试登录。Token 撤销或过期时，其对应捕获头也会一并清理。
+当客户端登录时，所有离线的 passthrough 服务器会自动使用新捕获的头重新尝试登录（直接传入已捕获 headers，不依赖请求上下文）。成功登录的 headers 按服务器名持久化存储，重启后健康检查和重连均使用该服务器上次成功的 headers。Token 撤销或过期时，其对应捕获头也会一并清理。
 
 ---
 
@@ -296,8 +298,9 @@ Passthrough 使用三级 header 解析：
 ## 健康检查
 
 - 每 60 秒（可通过 `timeouts.healthInterval` 配置）对所有上游服务器**并行**执行 `GET /System/Info/Public`
-- Passthrough 服务器使用捕获的客户端头（避免被 nginx 拒绝）
+- Passthrough 服务器优先使用该服务器上次成功登录的 headers（持久化存储），其次使用最近捕获的客户端头，避免被 nginx 拒绝
 - 状态变化时记录日志（ONLINE → OFFLINE / OFFLINE → ONLINE）
+- 健康检查定时器在 graceful shutdown 时自动清理
 
 ---
 
@@ -362,10 +365,12 @@ Passthrough 使用三级 header 解析：
 
 ### Passthrough 服务器登录失败 (403)
 
-启动时没有真实客户端连接，passthrough 默认使用 Infuse 身份。如果上游 nginx 拒绝 Infuse：
-1. 用真实 Emby 客户端（如 Infuse、Emby iOS）登录一次 Emby-in-One
+首次安装时没有客户端身份记录，passthrough 默认使用 Infuse 身份。如果上游 nginx 拒绝 Infuse：
+1. 用任意 Emby 客户端（Infuse、Emby iOS 等）登录一次 Emby-in-One
 2. 代理自动捕获客户端头并重试 passthrough 服务器登录
-3. 查看日志中 `header source` 字段确认使用了哪个头源
+3. 成功登录后，该服务器的客户端身份会持久化到 `data/captured-headers.json`，后续重启无需再次操作
+4. 查看日志中 `source` 字段确认使用了哪个头源（`last-success` = 使用上次成功的 headers，`captured-override` = 登录重试使用已捕获头，`infuse-fallback` = 无捕获头时兜底）
+5. 如果捕获的客户端 UA 本身也被上游拒绝，需从上游允许的客户端登录一次以捕获合适的身份
 
 ### 播放 403 / 401
 
@@ -380,6 +385,23 @@ Passthrough 使用三级 header 解析：
 - 如果上游服务器网络延迟高，部分结果可能被跳过
 - 查看日志中 `timeout` 或 `abort` 关键词
 - 可在 `config.yaml` 的 `timeouts` 字段适当调大超时值
+
+### 忘记管理员密码
+
+管理员密码在首次启动后自动加密存储。重置方法：
+
+**方法一：编辑配置文件**
+1. 编辑 `config/config.yaml`，将 `password:` 后的哈希值改为新的明文密码
+2. 重启服务，系统自动将明文密码转为加密格式
+
+**方法二：命令行重置**
+```bash
+# Docker 部署
+docker exec -it emby-in-one node src/index.js --reset-password 新密码
+
+# 直接运行
+node src/index.js --reset-password 新密码
+```
 
 ### SQLite 编译失败
 
@@ -427,7 +449,7 @@ src/
     ├── logger.js               # Winston 日志（Console + File 双 transport）
     ├── id-rewriter.js          # ID 虚拟化/反虚拟化递归重写
     ├── stream-proxy.js         # HTTP 流代理（背压、重定向跟随、HLS 相对路径重写）
-    ├── captured-headers.js     # 按 token 捕获真实客户端请求头（passthrough 用）
+    ├── captured-headers.js     # 按 token/服务器捕获客户端请求头（passthrough 持久化）
     ├── cors-policy.js          # Admin/客户端分级 CORS 策略
     └── request-store.js        # AsyncLocalStorage 请求上下文透传
 

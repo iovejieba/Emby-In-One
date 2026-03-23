@@ -69,6 +69,15 @@ function createUpstreamManager(config, idManager) {
       );
 
       clearTimeout(timeoutId);
+
+      for (let i = 0; i < results.length; i++) {
+        if (results[i].status === 'rejected') {
+          const client = onlineClients[i];
+          const reason = results[i].reason?.message || String(results[i].reason);
+          logger.warn(`[${client.name}] ${method} ${path} failed: ${reason}`);
+        }
+      }
+
       return results
         .filter(r => r.status === 'fulfilled')
         .map(r => r.value);

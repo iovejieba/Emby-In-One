@@ -6,6 +6,13 @@ const logger = require('./utils/logger');
 const capturedHeaders = require('./utils/captured-headers');
 
 /**
+ * Check if a password string is in hashed format (hex32:hex128).
+ */
+function isHashed(str) {
+  return /^[a-f0-9]{32}:[a-f0-9]{128}$/.test(str);
+}
+
+/**
  * Hash a plaintext password using scrypt with a random salt.
  * Returns "salt:hash" hex string.
  */
@@ -21,7 +28,7 @@ function hashPassword(plain) {
  */
 function verifyPassword(plain, stored) {
   if (!stored || !plain) return false;
-  if (!stored.includes(':')) {
+  if (!isHashed(stored)) {
     return stored === plain;
   }
   const [salt, hash] = stored.split(':');
@@ -96,7 +103,7 @@ function createAuthManager(config) {
       return null;
     }
 
-    if (!config.admin.password.includes(':')) {
+    if (!isHashed(config.admin.password)) {
       config.admin.password = hashPassword(password);
       const { saveConfig } = require('./config');
       saveConfig(config);
@@ -222,4 +229,4 @@ function createAuthManager(config) {
   };
 }
 
-module.exports = { createAuthManager, hashPassword, verifyPassword };
+module.exports = { createAuthManager, hashPassword, verifyPassword, isHashed };

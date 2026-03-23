@@ -89,7 +89,7 @@ function createFallbackRoutes(config, authManager, idManager, upstreamManager) {
         }
 
         // Guard: if upstream returned HTML instead of JSON (WAF/CDN error pages), don't forward raw HTML
-        if (typeof data === 'string' && data.trimStart().startsWith('<')) {
+        if (typeof data === 'string' && /^\s*<!DOCTYPE|^\s*<html/i.test(data)) {
           logger.warn(`Fallback: upstream [${targetClient.name}] returned HTML for GET ${req.path}, discarding`);
           return res.status(502).json({ message: 'Upstream returned non-JSON response' });
         }
@@ -108,7 +108,7 @@ function createFallbackRoutes(config, authManager, idManager, upstreamManager) {
         }
 
         if (data) {
-          if (typeof data === 'string' && data.trimStart().startsWith('<')) {
+          if (typeof data === 'string' && /^\s*<!DOCTYPE|^\s*<html/i.test(data)) {
             logger.warn(`Fallback: upstream [${targetClient.name}] returned HTML for ${req.method} ${req.path}, discarding`);
             return res.status(502).json({ message: 'Upstream returned non-JSON response' });
           }

@@ -2,7 +2,13 @@
  * Stores real client headers captured during authentication.
  * Captures are isolated per proxy token so one device's identity does not
  * leak into another device's passthrough requests.
+ * Also stores per-server "last successful login" headers for passthrough persistence.
+ * Persists to data/captured-headers.json for survival across restarts.
  */
+const fs = require('fs');
+const path = require('path');
+const logger = require('./logger');
+
 const CAPTURE_KEYS = [
   'user-agent',
   'x-emby-client', 'x-emby-client-version',
@@ -11,7 +17,9 @@ const CAPTURE_KEYS = [
 ];
 
 const capturedByToken = new Map();
+const serverHeaders = new Map(); // serverName → { headers, savedAt }
 let captureSequence = 0;
+let PERSIST_FILE = null;
 
 function buildCapturedHeaders(reqHeaders = {}) {
   const captured = {};
@@ -32,7 +40,7 @@ function getLatestEntry() {
 }
 
 function buildInfo(entry) {
-  if (!entry) return null;
+  if (!entry || !entry.headers) return null;
   const captured = entry.headers;
   return {
     userAgent: captured['user-agent'] || null,
@@ -44,9 +52,63 @@ function buildInfo(entry) {
   };
 }
 
+function load() {
+  if (!PERSIST_FILE || !fs.existsSync(PERSIST_FILE)) return;
+  try {
+    const raw = JSON.parse(fs.readFileSync(PERSIST_FILE, 'utf8'));
+
+    // Load per-token captured headers
+    const tokens = raw.tokens || raw; // backward compat: old format was flat object
+    if (tokens && typeof tokens === 'object' && !Array.isArray(tokens)) {
+      for (const [token, entry] of Object.entries(tokens)) {
+        if (token === 'servers') continue; // skip the servers key in old flat format
+        if (entry && entry.headers) {
+          capturedByToken.set(token, entry);
+          if (entry.sequence > captureSequence) captureSequence = entry.sequence;
+        }
+      }
+    }
+
+    // Load per-server success headers
+    if (raw.servers && typeof raw.servers === 'object') {
+      for (const [name, data] of Object.entries(raw.servers)) {
+        if (data && data.headers) {
+          serverHeaders.set(name, data);
+        }
+      }
+      logger.info(`Loaded ${serverHeaders.size} server passthrough header(s) from disk`);
+    }
+
+    if (capturedByToken.size > 0) {
+      logger.info(`Loaded ${capturedByToken.size} captured client header(s) from disk`);
+    }
+  } catch (e) {
+    logger.warn(`Failed to load captured headers: ${e.message}`);
+  }
+}
+
+function save() {
+  if (!PERSIST_FILE) return;
+  try {
+    const obj = {
+      tokens: Object.fromEntries(capturedByToken),
+      servers: Object.fromEntries(serverHeaders),
+    };
+    fs.writeFileSync(PERSIST_FILE, JSON.stringify(obj, null, 2), { encoding: 'utf8', mode: 0o600 });
+  } catch (e) {
+    logger.warn(`Failed to save captured headers: ${e.message}`);
+  }
+}
+
 const MAX_CAPTURED = 500;
 
 module.exports = {
+  init(dataDir) {
+    const dir = dataDir || (fs.existsSync('/app/data') ? '/app/data' : path.resolve(__dirname, '..', '..', 'data'));
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    PERSIST_FILE = path.join(dir, 'captured-headers.json');
+    load();
+  },
   set(token, reqHeaders) {
     if (!token) return null;
     if (capturedByToken.size >= MAX_CAPTURED && !capturedByToken.has(token)) {
@@ -62,6 +124,7 @@ module.exports = {
       sequence: ++captureSequence,
     };
     capturedByToken.set(token, entry);
+    save();
     return entry.headers;
   },
   get(token) {
@@ -70,11 +133,14 @@ module.exports = {
   },
   delete(token) {
     if (!token) return false;
-    return capturedByToken.delete(token);
+    const deleted = capturedByToken.delete(token);
+    if (deleted) save();
+    return deleted;
   },
   clear() {
     capturedByToken.clear();
     captureSequence = 0;
+    save();
   },
   getLatest() {
     const latest = getLatestEntry();
@@ -82,5 +148,15 @@ module.exports = {
   },
   getInfo() {
     return buildInfo(getLatestEntry());
+  },
+  // Per-server success headers
+  setServerHeaders(serverName, headers) {
+    if (!serverName || !headers) return;
+    serverHeaders.set(serverName, { headers: { ...headers }, savedAt: new Date().toISOString() });
+    save();
+  },
+  getServerHeaders(serverName) {
+    if (!serverName) return null;
+    return serverHeaders.get(serverName)?.headers || null;
   },
 };

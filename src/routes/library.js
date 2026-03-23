@@ -104,6 +104,13 @@ function createLibraryRoutes(config, authManager, idManager, upstreamManager) {
         })
       );
 
+      for (let i = 0; i < results.length; i++) {
+        if (results[i].status === 'rejected') {
+          const inst = instances[i];
+          logger.warn(`[${inst.client.name}] Seasons failed: ${results[i].reason?.message || 'unknown'}`);
+        }
+      }
+
       const successResults = results.filter(r => r.status === 'fulfilled').map(r => r.value);
       const merged = upstreamManager.mergeSeasonsResults(successResults, startTime, 20000);
 
@@ -159,6 +166,13 @@ function createLibraryRoutes(config, authManager, idManager, upstreamManager) {
           return { serverIndex: inst.serverIndex, data };
         })
       );
+
+      for (let i = 0; i < results.length; i++) {
+        if (results[i].status === 'rejected') {
+          const inst = instances[i];
+          logger.warn(`[${inst.client.name}] Episodes failed: ${results[i].reason?.message || 'unknown'}`);
+        }
+      }
 
       const successResults = results.filter(r => r.status === 'fulfilled').map(r => r.value);
       const merged = upstreamManager.mergeEpisodesResults(successResults, startTime, 20000);
@@ -250,6 +264,13 @@ function createLibraryRoutes(config, authManager, idManager, upstreamManager) {
           return { serverIndex: client.serverIndex, data };
         })
       );
+
+      for (let i = 0; i < results.length; i++) {
+        if (results[i].status === 'rejected') {
+          const client = onlineClients[i];
+          logger.warn(`[${client.name}] Search/Hints failed: ${results[i].reason?.message || 'unknown'}`);
+        }
+      }
 
       const allHints = [];
       let totalCount = 0;

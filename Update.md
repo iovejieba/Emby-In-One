@@ -6,6 +6,55 @@
 
 ---
 
+## Bugfix
+
+### Passthrough 透传登录重试使用 Infuse 兜底身份导致 403
+
+修复非标准客户端登录后，离线 passthrough 服务器自动重试时始终使用 Infuse 兜底身份、被上游 nginx 拒绝的问题。
+
+- `login()` 新增 `overrideHeaders` 参数，登录重试时直接传入刚捕获的客户端 headers
+- `_getPassthroughHeaders()` 新增五级优先级链：live-request → captured-token → last-success → captured-latest → infuse-fallback
+- 健康检查和重连优先使用该服务器上次成功登录的 headers（`last-success`）
+- 详见 [Bugfix.md](Bugfix.md)
+
+### 客户端身份持久化
+
+新增 passthrough 客户端身份按服务器维度持久化，重启后自动恢复。
+
+- 成功登录后，使用的完整 headers 按服务器名存储到 `data/captured-headers.json`
+- 重启时自动加载，passthrough 服务器无需等待用户重新登录
+- 同时保留 per-token 的客户端头隔离，确保多设备不串线
+
+### 管理面板编辑 passthrough 服务器返回 500
+
+修复通过管理面板编辑 passthrough 模式服务器（如修改播放模式）时，因登录验证失败导致 500 错误的问题。
+
+- `createValidatedClient` 对 passthrough 服务器允许登录失败后仍保存配置
+- passthrough 服务器在管理面板上下文无 captured headers 属正常行为，记录 WARN 日志
+
+### 搜索结果显示上游 HTML 错误页面
+
+修复上游服务器返回 HTML 错误页面（如 Cloudflare 522）时，fallback 路由将原始 HTML 直接发送给客户端的问题。
+
+- 检测响应以 `<!DOCTYPE` 或 `<html` 开头时，返回 502 JSON 错误而非原始 HTML
+- 不误拦截合法的 XML/SVG 响应
+
+### 超时错误日志缺少服务器标识
+
+改进所有聚合请求的超时日志，显示具体是哪台服务器失败。
+
+- `requestAll()`、Items/Latest、Search/Hints、Views、Seasons、Episodes 等路由均记录失败服务器名称和原因
+- 日志从 `Error in GET Items/Latest: timeout` 改为 `[HXD] Items/Latest failed: timeout of 30000ms exceeded`
+
+### 管理员密码重置机制
+
+修复密码哈希后用户无法在 config.yaml 或 SSH 面板中查看/重置密码的问题。
+
+- 新增 `--reset-password <新密码>` CLI 参数，支持命令行重置
+- config.yaml 中写入新的明文密码后重启，系统自动迁移为哈希格式
+- install.sh SSH 面板检测到哈希值时显示重置提示
+- README 新增"忘记管理员密码"FAQ
+
 ## 稳定性修复
 
 ### 搜索进入剧集时的观看历史隔离
@@ -49,50 +98,91 @@
 修复 passthrough 模式下所有设备共享同一份已捕获客户端身份的问题。
 
 - `captured-headers` 从全局单槽改为 `token -> headers` 映射
-- 当前请求无实时客户端头时，仅允许回退到“当前 token 对应”的已捕获身份
+- 当前请求无实时客户端头时，仅允许回退到”当前 token 对应”的已捕获身份
 - 登出、Token 撤销、Token 过期时同步清理对应 captured headers
 - 避免多设备、多用户场景下 UA / 设备信息串线
 
-### Admin API CORS 真正同源化
+### Admin API CORS 同源校验
 
-修复 `/admin/api/*` 反射任意 `Origin` 的问题。
+修复 `/admin/api/*` 未严格校验请求来源的问题。
 
-- Admin API 不再反射任意来源的 `Access-Control-Allow-Origin`
-- 管理面板接口回归真正的 same-origin 策略
-- 普通 Emby 客户端接口仍保持宽松 CORS 兼容性
+- Admin API 的 CORS 头仅在 Origin 与 Host 匹配时设置
+- 非匹配来源的跨域请求不会收到 `Access-Control-Allow-Origin` 响应头
+- 管理面板新增 `X-Content-Type-Options`、`X-Frame-Options`、`X-XSS-Protection` 安全响应头
+
+### API 响应脱敏
+
+修复管理面板 API 响应中泄露上游服务器内部信息的问题。
+
+- `/api/status` 不再返回上游服务器 URL 和 userId
+- `/api/upstream` 的 URL 字段自动去除凭据（`user:pass@`）
+- `/api/proxies` 的代理 URL 中密码显示为 `****`
+- 上游登录失败日志不再打印完整响应体，仅记录 message 字段
+
+### 管理员密码启动时自动加密
+
+- 密码从”首次登录时迁移”改为”启动时立即迁移”，消除明文窗口期
+- 密码哈希格式检测从 `includes(':')` 改为正则匹配 `hex(32):hex(128)`，支持含冒号的密码
+- Token 持久化文件 `tokens.json` 写入时指定 `mode: 0o600`
+- 配置文件写入改为原子操作（临时文件 + rename），Windows 兼容降级
+
+### Admin API 输入校验加固
+
+- `playbackMode` 仅接受 `proxy` / `redirect`
+- `serverName` 限制 1-100 字符
+- `adminUsername` 限制 1-50 字符
+- 代理 URL 仅接受 http/https 协议
+- `parseInt` 统一加 radix 和 NaN 检查
+- `reorder` 端点校验 fromIndex/toIndex 为整数类型
+- 上游配置 `normalizeUpstream` 新增 url 必填、URL 格式、apiKey/username 二选一校验
+
+## 其他改进
+
+- `favicon.ico` 请求静默返回 204，不再产生大量 401 日志
+- `rewriteRequestIds` 增加循环引用保护（`seen` Set）
+- 日志级别环境变量增加有效值校验
+- `playSessions` 移除每次注册时的多余全量清理
+- `System/Info` 的 `LocalAddress` 改为动态使用请求 Host
+- `images.js` 删除重复的 `/emby/` 前缀路由
+- CDN 资源（Tailwind、Vue、Lucide）锁定版本号，使用 Vue 生产构建
+- YAML 配置加载显式指定 `JSON_SCHEMA`
+- 上游错误响应不再原样转发给客户端
 
 ## 文档更新
 
-- `README.md` 同步补充本次 HLS、Passthrough、持久化与 Admin 安全修复说明
-- `README_EN.md` 同步补充本次 HLS、Passthrough、持久化与 Admin 安全修复说明
-- 两份 README 中的 passthrough、HLS、ID 持久化描述已更新为当前实现
+- `README.md` 更新 Passthrough 五级优先级说明、客户端身份持久化、健康检查描述、密码自动加密、忘记密码 FAQ
+- `Bugfix.md` 记录所有 bug 修复细节
+- `Update Plan.md` 更新 V1.2 版本说明
 
 ## 本次涉及文件
 
 | 文件 | 修改内容 |
 |------|----------|
-| `src/utils/series-userdata.js` | 系列级用户态选择 helper |
-| `src/routes/items.js` | 修复带 `ParentId` 的 `Resume` 聚合逻辑 |
-| `src/routes/library.js` | 修复带 `SeriesId` 的 `NextUp` 聚合逻辑 |
-| `src/utils/stream-proxy.js` | HLS 清单改为相对路径重写 |
-| `src/routes/streaming.js` | 移除 `localhost` HLS 重写依赖 |
-| `src/utils/captured-headers.js` | 改为 token 级客户端头隔离 |
-| `src/emby-client.js` | passthrough 头优先级调整 |
-| `src/routes/users.js` | 登录成功后按 token 捕获客户端头 |
-| `src/auth.js` | Token 撤销/过期时清理 captured headers |
-| `src/routes/admin.js` | 上游草稿校验提交流程 |
-| `src/id-manager.js` | 附加实例关系持久化到 SQLite |
-| `src/utils/cors-policy.js` | 新增 Admin/客户端分级 CORS 策略 |
-| `src/server.js` | 接入新的 CORS 与请求上下文逻辑 |
-| `tests/routes/items.resume-series.test.js` | `Resume` 回归测试 |
-| `tests/routes/library.nextup-series.test.js` | `NextUp` 回归测试 |
-| `tests/utils/stream-proxy.test.js` | HLS 重写测试 |
-| `tests/utils/captured-headers.test.js` | passthrough token 隔离测试 |
-| `tests/routes/admin.upstream-draft.test.js` | Admin 草稿提交流程测试 |
-| `tests/id-manager.persistence.test.js` | `otherInstances` 持久化恢复测试 |
-| `tests/utils/cors-policy.test.js` | Admin CORS 策略测试 |
-| `README.md` | 同步更新功能与实现说明 |
-| `README_EN.md` | 同步更新功能与实现说明 |
+| `src/emby-client.js` | passthrough 五级优先级链、login overrideHeaders、_lastSuccessHeaders 持久化、日志脱敏 |
+| `src/utils/captured-headers.js` | per-token + per-server 持久化、init/load/save、buildInfo null guard |
+| `src/routes/admin.js` | API 响应脱敏、输入校验、parseIndex、createValidatedClient passthrough 放行 |
+| `src/config.js` | YAML 安全加载、原子写入、上游配置校验、启动时密码哈希迁移 |
+| `src/auth.js` | isHashed() 正则检测、token 文件权限 0o600 |
+| `src/server.js` | CORS 中间件、安全响应头、favicon 204 |
+| `src/utils/cors-policy.js` | Admin Origin 同源校验 |
+| `src/utils/stream-proxy.js` | sanitizeUrl 日志脱敏、M3U8 缓冲限制 |
+| `src/routes/fallback.js` | 上游错误脱敏、HTML 响应拦截 |
+| `src/routes/images.js` | 删除重复 /emby/ 路由 |
+| `src/routes/users.js` | 登录重试传入 captured headers、Views 失败日志 |
+| `src/routes/items.js` | Items/Latest 等聚合失败日志 |
+| `src/routes/library.js` | Search/Seasons/Episodes 聚合失败日志 |
+| `src/upstream-manager.js` | requestAll 失败日志、stopHealthChecks |
+| `src/id-manager.js` | close() 方法 |
+| `src/index.js` | --reset-password CLI、capturedHeaders.init、shutdown 清理 |
+| `src/utils/logger.js` | 日志级别环境变量校验 |
+| `src/utils/id-rewriter.js` | rewriteRequestIds 循环引用保护 |
+| `src/routes/playback.js` | 移除多余 inline cleanup |
+| `src/routes/system.js` | LocalAddress 动态化 |
+| `public/admin.html` | CDN 版本锁定 |
+| `install.sh` | SSH 面板兼容哈希密码 |
+| `README.md` | Passthrough 五级解析、持久化、密码 FAQ |
+| `Bugfix.md` | 新增修复记录 |
+| `Update.md` | 更新日志 |
 
 ---
 

@@ -63,6 +63,8 @@ class EmbyClient {
     this.accessToken = serverConfig.apiKey || null;
     this.userId = null;
     this.online = false;
+    // 恢复上次成功登录的 passthrough headers
+    this._lastSuccessHeaders = capturedHeaders.getServerHeaders(this.name) || null;
     this.timeouts = {
       api: timeouts.api || 30000,
       login: timeouts.login || 10000,
@@ -126,9 +128,11 @@ class EmbyClient {
   /**
    * Get the best available headers for passthrough mode.
    * Priority:
-   *   1. Current request's live client headers
+   *   1. Current request's live client headers (requires X-Emby-Client)
    *   2. Captured headers for the current proxy token
-   *   3. Fixed Infuse fallback
+   *   3. This server's last successful login headers (persisted across restarts)
+   *   4. Most recently captured headers from any token
+   *   5. Fixed Infuse fallback
    */
   _getPassthroughHeaders() {
     let captured = null;
@@ -138,7 +142,7 @@ class EmbyClient {
     const liveHeaders = requestContext?.headers || null;
     const proxyToken = requestContext?.proxyToken || null;
 
-    if (liveHeaders && (liveHeaders['x-emby-client'] || liveHeaders['user-agent'])) {
+    if (liveHeaders && liveHeaders['x-emby-client']) {
       captured = {};
       for (const k of PASSTHROUGH_HEADERS) {
         if (liveHeaders[k]) captured[k] = liveHeaders[k];
@@ -152,6 +156,12 @@ class EmbyClient {
         captured = { ...saved };
         source = 'captured-token';
       }
+    }
+
+    if (!captured && this._lastSuccessHeaders) {
+      // _lastSuccessHeaders 是登录时构建的完整 headers（大写 key 格式如 User-Agent, X-Emby-Client）
+      // 直接返回，不需要再叠加 Infuse 基础
+      return { source: 'last-success', headers: { ...this._lastSuccessHeaders } };
     }
 
     if (!captured) {
@@ -289,7 +299,13 @@ class EmbyClient {
         this.accessToken = resp.data.AccessToken;
         this.userId = resp.data.User.Id;
         this.online = true;
-        logger.info(`[${this.name}] Login success, userId=${this.userId}`);
+        if (isPassthrough) {
+          this._lastSuccessHeaders = { ...loginHeaders };
+          capturedHeaders.setServerHeaders(this.name, loginHeaders);
+          logger.info(`[${this.name}] Login success, userId=${this.userId} (saved working headers, source=${headerSource})`);
+        } else {
+          logger.info(`[${this.name}] Login success, userId=${this.userId}`);
+        }
       } else {
         const bodyStr = JSON.stringify(resp.data || {}).substring(0, 200);
         throw new Error(`Unexpected response structure: ${bodyStr}`);
@@ -300,7 +316,8 @@ class EmbyClient {
       const errorMsg = status ? `HTTP ${status}` : err.message;
       logger.error(`[${this.name}] Login failed: ${errorMsg}`);
       if (status) {
-        logger.error(`[${this.name}] Response body: ${JSON.stringify(respData).substring(0, 500)}`);
+        const msg = typeof respData === 'object' ? (respData?.message || respData?.Message || '') : '';
+        if (msg) logger.error(`[${this.name}] Response message: ${msg.substring(0, 200)}`);
       }
       if ((status === 401 || status === 403) && isPassthrough) {
         logger.warn(`[${this.name}] Passthrough ${status} — sent identity: Client="${clientName}", Device="${deviceName}", DeviceId="${deviceId}", UA="${userAgent}"`);

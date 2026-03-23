@@ -75,11 +75,14 @@ function loadConfig() {
   config.timeouts.healthInterval = config.timeouts.healthInterval || 60000;
 
   // 启动时自动迁移明文密码为哈希格式
-  if (config.admin.password && !config.admin.password.includes(':')) {
-    const { hashPassword } = require('./auth');
-    config.admin.password = hashPassword(config.admin.password);
-    saveConfig(config);
-    logger.info('Admin password migrated to hashed storage at startup');
+  if (config.admin.password) {
+    const { isHashed, hashPassword } = require('./auth');
+    if (!isHashed(config.admin.password)) {
+      config.admin.password = hashPassword(config.admin.password);
+      saveConfig(config);
+      logger.info('Admin password migrated to hashed storage.');
+      logger.info('To reset password: edit config.yaml with a new plaintext password and restart, or run: node src/index.js --reset-password <new-password>');
+    }
   }
 
   return config;
@@ -153,7 +156,13 @@ function saveConfig(config) {
       const content = yaml.dump(toSave, { lineWidth: -1 });
       const tmpPath = CONFIG_PATH + '.tmp';
       fs.writeFileSync(tmpPath, content, 'utf8');
-      fs.renameSync(tmpPath, CONFIG_PATH);
+      try {
+        fs.renameSync(tmpPath, CONFIG_PATH);
+      } catch {
+        // Windows: renameSync may fail if target exists; fallback to direct write
+        fs.writeFileSync(CONFIG_PATH, content, 'utf8');
+        try { fs.unlinkSync(tmpPath); } catch {}
+      }
     } catch (err) {
       logger.error(`Failed to save config: ${err.message}`);
     }

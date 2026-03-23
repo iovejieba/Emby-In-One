@@ -85,6 +85,13 @@ function createUserRoutes(config, authManager, idManager, upstreamManager) {
         })
       );
 
+      for (let i = 0; i < results.length; i++) {
+        if (results[i].status === 'rejected') {
+          const client = onlineClients[i];
+          logger.warn(`[${client.name}] Views failed: ${results[i].reason?.message || 'unknown'}`);
+        }
+      }
+
       const successResults = results
         .filter(r => r.status === 'fulfilled')
         .map(r => r.value);
