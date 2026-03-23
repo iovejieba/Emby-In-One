@@ -4,6 +4,9 @@ const yaml = require('js-yaml');
 const { v4: uuidv4 } = require('uuid');
 const logger = require('./utils/logger');
 
+// Write queue to serialize concurrent saveConfig calls
+let writeQueue = Promise.resolve();
+
 let CONFIG_PATH = path.resolve(__dirname, '..', 'config.yaml');
 
 // In Docker, we prefer /app/config/config.yaml for easier volume mounting
@@ -90,49 +93,56 @@ function normalizeUpstream(s, index, config) {
 }
 
 function saveConfig(config) {
-  // Build a clean object for saving
-  const toSave = {
-    server: {
-      port: config.server.port,
-      name: config.server.name,
-      id: config.server.id,
-    },
-    admin: {
-      username: config.admin.username,
-      password: config.admin.password,
-    },
-    playback: {
-      mode: config.playback.mode,
-    },
-    timeouts: config.timeouts || {},
-    proxies: config.proxies || [],
-    upstream: config.upstream.map(s => {
-      const entry = { 
-        name: s.name, 
-        url: s.url,
-        spoofClient: s.spoofClient || 'none',
-        followRedirects: s.followRedirects !== undefined ? s.followRedirects : true,
-        proxyId: s.proxyId || null,
-        priorityMetadata: s.priorityMetadata || false
+  // Serialize writes through a promise chain to prevent race conditions
+  writeQueue = writeQueue.then(() => {
+    try {
+      // Build a clean object for saving
+      const toSave = {
+        server: {
+          port: config.server.port,
+          name: config.server.name,
+          id: config.server.id,
+        },
+        admin: {
+          username: config.admin.username,
+          password: config.admin.password,
+        },
+        playback: {
+          mode: config.playback.mode,
+        },
+        timeouts: config.timeouts || {},
+        proxies: config.proxies || [],
+        upstream: config.upstream.map(s => {
+          const entry = {
+            name: s.name,
+            url: s.url,
+            spoofClient: s.spoofClient || 'none',
+            followRedirects: s.followRedirects !== undefined ? s.followRedirects : true,
+            proxyId: s.proxyId || null,
+            priorityMetadata: s.priorityMetadata || false
+          };
+          if (s.apiKey) {
+            entry.apiKey = s.apiKey;
+          } else {
+            entry.username = s.username;
+            entry.password = s.password;
+          }
+          if (s.playbackMode && s.playbackMode !== config.playback.mode) {
+            entry.playbackMode = s.playbackMode;
+          }
+          if (s.streamingUrl) {
+            entry.streamingUrl = s.streamingUrl;
+          }
+          return entry;
+        }),
       };
-      if (s.apiKey) {
-        entry.apiKey = s.apiKey;
-      } else {
-        entry.username = s.username;
-        entry.password = s.password;
-      }
-      if (s.playbackMode && s.playbackMode !== config.playback.mode) {
-        entry.playbackMode = s.playbackMode;
-      }
-      if (s.streamingUrl) {
-        entry.streamingUrl = s.streamingUrl;
-      }
-      return entry;
-    }),
-  };
 
-  const content = yaml.dump(toSave, { lineWidth: -1 });
-  fs.writeFileSync(CONFIG_PATH, content, 'utf8');
+      const content = yaml.dump(toSave, { lineWidth: -1 });
+      fs.writeFileSync(CONFIG_PATH, content, 'utf8');
+    } catch (err) {
+      logger.error(`Failed to save config: ${err.message}`);
+    }
+  });
 }
 
 module.exports = { loadConfig, saveConfig, normalizeUpstream, CONFIG_PATH };

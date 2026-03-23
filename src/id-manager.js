@@ -13,12 +13,16 @@ function createIdManager(dataDir) {
   let stmtGetByVirtual = null;
   let stmtGetByOriginal = null;
   let stmtCount = null;
+  let stmtInsertAdditional = null;
+  let stmtDeleteByServer = null;
+  let stmtDeleteAdditionalByServer = null;
+  let stmtDeleteAdditionalByVirtual = null;
+  let stmtShiftByServer = null;
+  let stmtShiftAdditionalByServer = null;
 
-  // In-memory fallback
   const virtualToOriginal = new Map();
   const originalToVirtual = new Map();
 
-  // Try to initialize SQLite
   try {
     const Database = require('better-sqlite3');
     const dbDir = dataDir || path.resolve(__dirname, '..', 'data');
@@ -27,7 +31,6 @@ function createIdManager(dataDir) {
     const dbPath = path.join(dbDir, 'mappings.db');
     db = new Database(dbPath);
 
-    // WAL mode for better concurrent performance
     db.pragma('journal_mode = WAL');
 
     db.exec(`
@@ -37,21 +40,50 @@ function createIdManager(dataDir) {
         server_index INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_original ON id_mappings(original_id, server_index);
+      CREATE TABLE IF NOT EXISTS id_additional_instances (
+        virtual_id TEXT NOT NULL,
+        original_id TEXT NOT NULL,
+        server_index INTEGER NOT NULL,
+        UNIQUE(virtual_id, original_id, server_index)
+      );
+      CREATE INDEX IF NOT EXISTS idx_additional_virtual ON id_additional_instances(virtual_id);
     `);
 
     stmtInsert = db.prepare('INSERT OR IGNORE INTO id_mappings (virtual_id, original_id, server_index) VALUES (?, ?, ?)');
     stmtGetByVirtual = db.prepare('SELECT original_id, server_index FROM id_mappings WHERE virtual_id = ?');
     stmtGetByOriginal = db.prepare('SELECT virtual_id FROM id_mappings WHERE original_id = ? AND server_index = ?');
     stmtCount = db.prepare('SELECT COUNT(*) as count FROM id_mappings');
+    stmtInsertAdditional = db.prepare('INSERT OR IGNORE INTO id_additional_instances (virtual_id, original_id, server_index) VALUES (?, ?, ?)');
+    stmtDeleteByServer = db.prepare('DELETE FROM id_mappings WHERE server_index = ?');
+    stmtDeleteAdditionalByServer = db.prepare('DELETE FROM id_additional_instances WHERE server_index = ?');
+    stmtDeleteAdditionalByVirtual = db.prepare('DELETE FROM id_additional_instances WHERE virtual_id = ?');
+    stmtShiftByServer = db.prepare('UPDATE id_mappings SET server_index = server_index - 1 WHERE server_index > ?');
+    stmtShiftAdditionalByServer = db.prepare('UPDATE id_additional_instances SET server_index = server_index - 1 WHERE server_index > ?');
 
-    // Load existing mappings into memory cache for speed
     const rows = db.prepare('SELECT virtual_id, original_id, server_index FROM id_mappings').all();
     for (const row of rows) {
-      virtualToOriginal.set(row.virtual_id, { originalId: row.original_id, serverIndex: row.server_index });
+      virtualToOriginal.set(row.virtual_id, {
+        originalId: row.original_id,
+        serverIndex: row.server_index,
+        otherInstances: [],
+      });
       originalToVirtual.set(`${row.original_id}:${row.server_index}`, row.virtual_id);
     }
 
-    logger.info(`SQLite ID store initialized: ${rows.length} existing mappings loaded`);
+    const additionalRows = db.prepare('SELECT virtual_id, original_id, server_index FROM id_additional_instances').all();
+    for (const row of additionalRows) {
+      const resolved = virtualToOriginal.get(row.virtual_id);
+      if (!resolved) continue;
+      const exists = resolved.otherInstances.some(inst => inst.originalId === row.original_id && inst.serverIndex === row.server_index);
+      if (!exists) {
+        resolved.otherInstances.push({
+          originalId: row.original_id,
+          serverIndex: row.server_index,
+        });
+      }
+    }
+
+    logger.info(`SQLite ID store initialized: ${rows.length} primary mapping(s), ${additionalRows.length} additional instance mapping(s) loaded`);
   } catch (err) {
     logger.warn(`SQLite not available (${err.message}), using in-memory ID store`);
     db = null;
@@ -62,9 +94,8 @@ function createIdManager(dataDir) {
   }
 
   function getOrCreateVirtualId(originalId, serverIndex) {
-    if (originalId == null || originalId === "") return originalId;
+    if (originalId == null || originalId === '') return originalId;
 
-    // If it's already a virtual ID that we know about, return it as-is
     if (virtualToOriginal.has(originalId)) {
       return originalId;
     }
@@ -73,13 +104,35 @@ function createIdManager(dataDir) {
     let virtualId = originalToVirtual.get(key);
     if (virtualId) return virtualId;
 
+    if (stmtGetByOriginal) {
+      try {
+        const existing = stmtGetByOriginal.get(originalId, serverIndex);
+        if (existing?.virtual_id) {
+          virtualId = existing.virtual_id;
+          if (!virtualToOriginal.has(virtualId)) {
+            const info = stmtGetByVirtual.get(virtualId);
+            virtualToOriginal.set(virtualId, {
+              originalId: info.original_id,
+              serverIndex: info.server_index,
+              otherInstances: [],
+            });
+          }
+          originalToVirtual.set(key, virtualId);
+          return virtualId;
+        }
+      } catch (e) {
+        logger.warn(`SQLite lookup failed: ${e.message}`);
+      }
+    }
+
     virtualId = uuidv4().replace(/-/g, '');
     virtualToOriginal.set(virtualId, { originalId, serverIndex, otherInstances: [] });
     originalToVirtual.set(key, virtualId);
 
-    // Persist to SQLite
     if (stmtInsert) {
-      try { stmtInsert.run(virtualId, originalId, serverIndex); } catch (e) {
+      try {
+        stmtInsert.run(virtualId, originalId, serverIndex);
+      } catch (e) {
         logger.warn(`SQLite insert failed: ${e.message}`);
       }
     }
@@ -109,18 +162,21 @@ function createIdManager(dataDir) {
     const exists = resolved.otherInstances.some(inst => inst.originalId === originalId && inst.serverIndex === serverIndex);
     if (!exists) {
       resolved.otherInstances.push({ originalId, serverIndex });
-      // Note: In a full implementation, we might want to persist these secondary mappings too.
-      // For now, we'll keep them in memory for the current session's merged results.
+      if (stmtInsertAdditional) {
+        try {
+          stmtInsertAdditional.run(virtualId, originalId, serverIndex);
+        } catch (e) {
+          logger.warn(`SQLite additional insert failed: ${e.message}`);
+        }
+      }
     }
   }
 
   function resolveVirtualId(virtualId) {
     if (!virtualId) return null;
     const resolved = virtualToOriginal.get(virtualId) || null;
-    if (resolved) {
-      // logger.debug(`Resolved virtualId=${virtualId} → originalId=${resolved.originalId} [Server ${resolved.serverIndex}]`);
-    } else {
-      // logger.debug(`Failed to resolve virtualId=${virtualId}`);
+    if (resolved && !resolved.otherInstances) {
+      resolved.otherInstances = [];
     }
     return resolved;
   }
@@ -131,7 +187,7 @@ function createIdManager(dataDir) {
 
   function getStats() {
     return {
-      mappingCount: virtualToOriginal.size,
+      mappingCount: stmtCount ? stmtCount.get().count : virtualToOriginal.size,
       persistent: db !== null,
     };
   }
@@ -142,24 +198,49 @@ function createIdManager(dataDir) {
    */
   function removeByServerIndex(serverIndex) {
     let removed = 0;
+    const keysToDelete = [];
     for (const [virtualId, info] of virtualToOriginal.entries()) {
       if (info.serverIndex === serverIndex) {
-        originalToVirtual.delete(_compositeKey(info.originalId, serverIndex));
-        virtualToOriginal.delete(virtualId);
-        removed++;
+        keysToDelete.push(virtualId);
       }
     }
-    // Also remove secondary instances pointing to this server
-    for (const [, info] of virtualToOriginal.entries()) {
+
+    for (const virtualId of keysToDelete) {
+      const info = virtualToOriginal.get(virtualId);
+      if (!info) continue;
+      originalToVirtual.delete(_compositeKey(info.originalId, info.serverIndex));
+      virtualToOriginal.delete(virtualId);
+      removed++;
+      if (stmtDeleteAdditionalByVirtual) {
+        try {
+          stmtDeleteAdditionalByVirtual.run(virtualId);
+        } catch (e) {
+          logger.warn(`SQLite additional cleanup failed: ${e.message}`);
+        }
+      }
+    }
+
+    for (const info of virtualToOriginal.values()) {
       if (info.otherInstances) {
         info.otherInstances = info.otherInstances.filter(inst => inst.serverIndex !== serverIndex);
       }
     }
-    if (db) {
-      try { db.prepare('DELETE FROM id_mappings WHERE server_index = ?').run(serverIndex); } catch (e) {
+
+    if (stmtDeleteByServer) {
+      try {
+        stmtDeleteByServer.run(serverIndex);
+      } catch (e) {
         logger.warn(`SQLite delete failed: ${e.message}`);
       }
     }
+    if (stmtDeleteAdditionalByServer) {
+      try {
+        stmtDeleteAdditionalByServer.run(serverIndex);
+      } catch (e) {
+        logger.warn(`SQLite additional delete failed: ${e.message}`);
+      }
+    }
+
     logger.info(`Removed ${removed} ID mappings for server index ${serverIndex}`);
     return removed;
   }
@@ -169,7 +250,6 @@ function createIdManager(dataDir) {
    * Called after an upstream server is deleted to keep indices consistent.
    */
   function shiftServerIndices(deletedIndex) {
-    // Rebuild originalToVirtual keys (they contain serverIndex)
     for (const [virtualId, info] of virtualToOriginal.entries()) {
       if (info.serverIndex > deletedIndex) {
         originalToVirtual.delete(_compositeKey(info.originalId, info.serverIndex));
@@ -182,13 +262,22 @@ function createIdManager(dataDir) {
         }
       }
     }
-    if (db) {
+
+    if (stmtShiftByServer) {
       try {
-        db.prepare('UPDATE id_mappings SET server_index = server_index - 1 WHERE server_index > ?').run(deletedIndex);
+        stmtShiftByServer.run(deletedIndex);
       } catch (e) {
         logger.warn(`SQLite update failed: ${e.message}`);
       }
     }
+    if (stmtShiftAdditionalByServer) {
+      try {
+        stmtShiftAdditionalByServer.run(deletedIndex);
+      } catch (e) {
+        logger.warn(`SQLite additional update failed: ${e.message}`);
+      }
+    }
+
     logger.info(`Shifted server indices after deleting index ${deletedIndex}`);
   }
 

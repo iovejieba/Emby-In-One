@@ -13,11 +13,19 @@ function createPlaybackRoutes(config, authManager, idManager, upstreamManager) {
   function registerPlaySession(virtualPlaySessionId, serverIndex, originalPlaySessionId) {
     playSessions.set(virtualPlaySessionId, { serverIndex, originalPlaySessionId, createdAt: Date.now() });
     // Evict expired entries on each registration (amortized cleanup)
+    cleanupExpiredSessions();
+  }
+
+  function cleanupExpiredSessions() {
     const now = Date.now();
     for (const [id, entry] of playSessions.entries()) {
       if (now - entry.createdAt > PLAY_SESSION_TTL_MS) playSessions.delete(id);
     }
   }
+
+  // Proactive cleanup every 30 minutes
+  const cleanupInterval = setInterval(cleanupExpiredSessions, 30 * 60 * 1000);
+  cleanupInterval.unref(); // Don't prevent process exit
 
   // GET /Items/:itemId/PlaybackInfo
   router.get('/Items/:itemId/PlaybackInfo', requireAuth, async (req, res) => {

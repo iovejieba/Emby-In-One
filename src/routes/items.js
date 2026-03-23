@@ -1,6 +1,7 @@
 const { Router } = require('express');
 const { requireAuth } = require('../middleware/auth-middleware');
 const { rewriteResponseIds } = require('../utils/id-rewriter');
+const { fetchSeriesScopedItems } = require('../utils/series-userdata');
 const logger = require('../utils/logger');
 
 function createItemRoutes(config, authManager, idManager, upstreamManager) {
@@ -110,19 +111,37 @@ function createItemRoutes(config, authManager, idManager, upstreamManager) {
       const virtualParentId = params.ParentId || params.parentId || params.parentid;
 
       if (virtualParentId) {
-        // ParentId present: resolve it and only query the owning server
         const resolved = req.resolveId(virtualParentId);
         if (!resolved) {
           return res.json({ Items: [], TotalRecordCount: 0, StartIndex: 0 });
         }
 
-        const upstreamParams = { ...params, ParentId: resolved.originalId };
-        delete upstreamParams.parentId;
-        delete upstreamParams.parentid;
+        const selected = await fetchSeriesScopedItems({
+          resolved,
+          upstreamManager,
+          fetchItems: async (inst) => {
+            const upstreamParams = { ...params, ParentId: inst.originalId };
+            delete upstreamParams.parentId;
+            delete upstreamParams.parentid;
 
-        const path = `/Users/${resolved.client.userId}/Items/Resume`;
-        const data = await fetchItemsFromServer(resolved.client, path, upstreamParams);
-        return res.json(data);
+            return inst.client.request('GET', `/Users/${inst.client.userId}/Items/Resume`, {
+              params: upstreamParams,
+            });
+          },
+        });
+
+        const items = selected.items || [];
+        if (selected.serverIndex != null) {
+          for (const item of items) {
+            rewriteResponseIds(item, selected.serverIndex, idManager, config.server.id, authManager.getProxyUserId());
+          }
+        }
+
+        return res.json({
+          Items: items,
+          TotalRecordCount: items.length,
+          StartIndex: 0,
+        });
       }
 
       // No ParentId: query all servers and merge

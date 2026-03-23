@@ -1,4 +1,5 @@
 const { Router } = require('express');
+const { requireAuth } = require('../middleware/auth-middleware');
 const { rewriteResponseIds } = require('../utils/id-rewriter');
 const { proxyStream, buildStreamUrl } = require('../utils/stream-proxy');
 const logger = require('../utils/logger');
@@ -19,8 +20,9 @@ function createFallbackRoutes(config, authManager, idManager, upstreamManager) {
 
   /**
    * Fallback handler: try to route to the correct upstream server.
+   * Requires authentication to prevent unauthenticated upstream access.
    */
-  router.use(async (req, res) => {
+  router.use(requireAuth, async (req, res) => {
     try {
       // Try to find a virtual ID in the URL path
       const idFromPath = extractIdFromPath(req.path);

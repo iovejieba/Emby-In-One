@@ -1,6 +1,7 @@
 const { Router } = require('express');
 const { requireAuth } = require('../middleware/auth-middleware');
 const { rewriteResponseIds } = require('../utils/id-rewriter');
+const { fetchSeriesScopedItems } = require('../utils/series-userdata');
 const logger = require('../utils/logger');
 
 function createLibraryRoutes(config, authManager, idManager, upstreamManager) {
@@ -179,6 +180,38 @@ function createLibraryRoutes(config, authManager, idManager, upstreamManager) {
   // GET /Shows/NextUp
   router.get('/Shows/NextUp', requireAuth, async (req, res) => {
     try {
+      const params = { ...req.query };
+      const virtualSeriesId = params.SeriesId;
+
+      if (virtualSeriesId) {
+        const resolved = req.resolveId(virtualSeriesId);
+        if (!resolved) {
+          return res.json({ Items: [], TotalRecordCount: 0 });
+        }
+
+        const selected = await fetchSeriesScopedItems({
+          resolved,
+          upstreamManager,
+          fetchItems: async (inst) => {
+            const upstreamParams = { ...params, UserId: inst.client.userId, SeriesId: inst.originalId };
+            return inst.client.request('GET', '/Shows/NextUp', { params: upstreamParams });
+          },
+        });
+
+        const items = selected.items || [];
+        if (selected.serverIndex != null) {
+          for (const item of items) {
+            rewriteResponseIds(item, selected.serverIndex, idManager, config.server.id, authManager.getProxyUserId());
+          }
+        }
+        return res.json({
+          Items: items,
+          TotalRecordCount: items.length,
+          StartIndex: 0,
+        });
+      }
+
+      // No SeriesId: Global NextUp query
       const onlineClients = upstreamManager.getOnlineClients();
       const results = await Promise.allSettled(
         onlineClients.map(async (client) => {

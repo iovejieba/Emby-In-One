@@ -29,10 +29,9 @@ function createStreamingRoutes(config, idManager, upstreamManager) {
       return res.status(404).json({ message: 'Item not found' });
     }
 
-    // Resolve MediaSourceId in query params — this determines the ACTUAL server to stream from
     const params = { ...req.query };
     let virtualMsId = null;
-    let actualClient = resolved.client;        // default: item's primary server
+    let actualClient = resolved.client;
     let actualServerIndex = resolved.serverIndex;
     let actualOriginalId = resolved.originalId;
 
@@ -41,13 +40,11 @@ function createStreamingRoutes(config, idManager, upstreamManager) {
       const msResolved = idManager.resolveVirtualId(params.MediaSourceId);
       if (msResolved) {
         params.MediaSourceId = msResolved.originalId;
-        // If MediaSource belongs to a different server than the item, switch to that server
         if (msResolved.serverIndex !== resolved.serverIndex) {
           const msClient = upstreamManager.getClient(msResolved.serverIndex);
           if (msClient && msClient.online) {
             actualClient = msClient;
             actualServerIndex = msResolved.serverIndex;
-            // Also need the original item ID on THAT server
             const otherInst = (resolved.otherInstances || []).find(i => i.serverIndex === msResolved.serverIndex);
             if (otherInst) actualOriginalId = otherInst.originalId;
           }
@@ -62,7 +59,6 @@ function createStreamingRoutes(config, idManager, upstreamManager) {
     const upstreamPath = pathBuilder(actualOriginalId, req);
     let upstreamUrl;
 
-    // Check if we have a specifically stored stream URL for this MediaSource
     const isTranscode = req.path.includes('master.m3u8') || req.path.includes('main.m3u8') || req.path.includes('hls');
     const storedUrl = idManager.getMediaSourceStreamUrl(isTranscode ? virtualMsId + '_transcode' : virtualMsId);
 
@@ -79,7 +75,6 @@ function createStreamingRoutes(config, idManager, upstreamManager) {
         upstreamUrl = buildStreamUrl(actualClient, upstreamPath, params);
       }
     } else {
-      // Fallback: build from client base URL
       upstreamUrl = buildStreamUrl(actualClient, upstreamPath, params);
     }
 
@@ -90,12 +85,9 @@ function createStreamingRoutes(config, idManager, upstreamManager) {
       return res.redirect(302, upstreamUrl);
     }
 
-    // Proxy mode
     try {
       const streamHeaders = actualClient.getRequestHeaders();
       logger.debug(`Stream headers for [${actualClient.name}]: ${JSON.stringify(streamHeaders)}`);
-      // Attach proxy base URL and token so proxyStream can rewrite HLS manifest URLs
-      req._proxyBase = `http://localhost:${config.server.port}`;
       req._proxyToken = req.proxyToken || req.query.api_key || '';
       await proxyStream(upstreamUrl, actualClient.accessToken, req, res, streamHeaders);
     } catch (err) {
@@ -104,8 +96,6 @@ function createStreamingRoutes(config, idManager, upstreamManager) {
     }
   }
 
-  // GET /Videos/:itemId/stream
-  // GET /Videos/:itemId/stream.:format
   router.get('/Videos/:itemId/stream', requireAuth, async (req, res) => {
     await handleStream(req, res, (origId) => `/Videos/${origId}/stream`);
   });
@@ -113,8 +103,6 @@ function createStreamingRoutes(config, idManager, upstreamManager) {
     await handleStream(req, res, (origId, r) => `/Videos/${origId}/stream.${r.params.format}`);
   });
 
-  // GET /Audio/:itemId/stream
-  // GET /Audio/:itemId/stream.:format
   router.get('/Audio/:itemId/stream', requireAuth, async (req, res) => {
     await handleStream(req, res, (origId) => `/Audio/${origId}/stream`);
   });
@@ -122,34 +110,28 @@ function createStreamingRoutes(config, idManager, upstreamManager) {
     await handleStream(req, res, (origId, r) => `/Audio/${origId}/stream.${r.params.format}`);
   });
 
-  // GET /Audio/:itemId/universal
   router.get('/Audio/:itemId/universal', requireAuth, async (req, res) => {
     await handleStream(req, res, (origId) => `/Audio/${origId}/universal`);
   });
 
-  // GET /Videos/:itemId/master.m3u8 — HLS master playlist
   router.get('/Videos/:itemId/master.m3u8', requireAuth, async (req, res) => {
     await handleStream(req, res, (origId) => `/Videos/${origId}/master.m3u8`);
   });
 
-  // GET /Videos/:itemId/main.m3u8
   router.get('/Videos/:itemId/main.m3u8', requireAuth, async (req, res) => {
     await handleStream(req, res, (origId) => `/Videos/${origId}/main.m3u8`);
   });
 
-  // GET /Videos/:itemId/hls1/:playlistId/:segmentId.:format — HLS segments
   router.get('/Videos/:itemId/hls1/:playlistId/:segmentId.:format', requireAuth, async (req, res) => {
     await handleStream(req, res, (origId, r) =>
       `/Videos/${origId}/hls1/${r.params.playlistId}/${r.params.segmentId}.${r.params.format}`
     );
   });
 
-  // GET /Videos/:itemId/hls/:playlistFile — HLS playlist files
   router.get('/Videos/:itemId/hls/:playlistFile', requireAuth, async (req, res) => {
     await handleStream(req, res, (origId, r) => `/Videos/${origId}/hls/${r.params.playlistFile}`);
   });
 
-  // GET /Videos/:itemId/:mediaSourceId/Subtitles/:subtitleIndex/:startTicks/Stream.:format
   router.get('/Videos/:itemId/:mediaSourceId/Subtitles/:subtitleIndex/:startTicks/Stream.:format', requireAuth, async (req, res) => {
     const { mediaSourceId, subtitleIndex, startTicks, format } = req.params;
     let origMediaSourceId = mediaSourceId;
@@ -160,7 +142,6 @@ function createStreamingRoutes(config, idManager, upstreamManager) {
     );
   });
 
-  // GET /Videos/:itemId/:mediaSourceId/Subtitles/:subtitleIndex/Stream.:format
   router.get('/Videos/:itemId/:mediaSourceId/Subtitles/:subtitleIndex/Stream.:format', requireAuth, async (req, res) => {
     const { mediaSourceId, subtitleIndex, format } = req.params;
     let origMediaSourceId = mediaSourceId;
@@ -171,7 +152,6 @@ function createStreamingRoutes(config, idManager, upstreamManager) {
     );
   });
 
-  // GET /Videos/:itemId/:mediaSourceId/Attachments/:attachmentIndex
   router.get('/Videos/:itemId/:mediaSourceId/Attachments/:attachmentIndex', requireAuth, async (req, res) => {
     const { mediaSourceId, attachmentIndex } = req.params;
     let origMediaSourceId = mediaSourceId;
@@ -182,7 +162,6 @@ function createStreamingRoutes(config, idManager, upstreamManager) {
     );
   });
 
-  // DELETE /Videos/ActiveEncodings — stop transcoding
   router.delete('/Videos/ActiveEncodings', requireAuth, async (req, res) => {
     try {
       const params = { ...req.query };
@@ -202,7 +181,6 @@ function createStreamingRoutes(config, idManager, upstreamManager) {
           await client.request('DELETE', '/Videos/ActiveEncodings', { params });
         }
       } else {
-        // Send to all servers
         const onlineClients = upstreamManager.getOnlineClients();
         await Promise.allSettled(
           onlineClients.map(c => c.request('DELETE', '/Videos/ActiveEncodings', { params }))

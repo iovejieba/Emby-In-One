@@ -1,8 +1,17 @@
 # Emby-In-One
 
-[中文文档](README.md) | [GitHub](https://github.com/ArizeSky/Emby-In-One)
+> **Version: V1.2**
+
+[中文文档](README.md) | [Changelog](Update.md) | [Update Plan](Update%20Plan.md) | [GitHub](https://github.com/ArizeSky/Emby-In-One)
 
 Multi-server Emby aggregation proxy — merges libraries from multiple upstream Emby servers into a single endpoint accessible by any standard Emby client.
+
+## Demo Site
+
+[Demo Site](https://emby.cothx.eu.cc/)
+Emby server address: https://emby.cothx.eu.cc/
+Username: admin
+Password: 5T5xF4oMxcnrcCPA
 
 ## Preview
 
@@ -19,19 +28,19 @@ Multi-server Emby aggregation proxy — merges libraries from multiple upstream 
 
 - **Multi-Server Aggregation** — Combine media libraries, search results, and metadata from multiple Emby servers into one unified view
 - **Smart Deduplication** — **Search only**: identical titles (matched by TMDB ID or Title + Year) are automatically merged in search results, preserving multiple MediaSource versions; when browsing a library, data comes directly from the upstream server that owns that library — no cross-library merging is applied
-- **Client Passthrough** — Forward real client identity (UA, device info) to upstream servers, bypassing client whitelist restrictions
+- **Series-Level History Isolation** — Search results can still aggregate the same series across multiple servers, but once you enter a specific series, `Resume` / `NextUp` now prefers the primary instance of that search result and only falls back to other same-series instances when needed, instead of mixing progress from every server together
+- **Client Passthrough** — Forward real client identity (UA, device info) to upstream servers with proxy-token isolation, preventing one device from reusing another device's captured identity
 - **UA Spoofing** — Impersonate Infuse or official Emby Web client for servers with strict client policies
-- **Dual Playback Modes** — Proxy mode (traffic routed through the aggregator) or Redirect mode (302 redirect to upstream)
+- **Dual Playback Modes** — Proxy mode (traffic routed through the aggregator, with HLS manifests rewritten to proxy-relative paths) or Redirect mode (302 redirect to upstream)
 - **Proxy Pool** — Assign HTTP/HTTPS proxies per upstream server for geo-restricted or network-segmented environments
 - **Persistent Logging** — Auto-rotating log files (5 MB), with web-based viewing, downloading, and clearing
-- **Web Admin Panel** — Full server management UI: add/edit/delete/reorder upstream servers, live logs, global settings
+- **Web Admin Panel** — Full server management UI: add/edit/delete/reorder upstream servers, live logs, global settings, and draft-first upstream validation before saving
 
 ---
 
 ## Known Issues
 
-- **"Continue Watching" shows unrelated content**: Episodes in the "Continue Watching" row may display and link to content from unrelated series or movies. This issue is not yet fixed.
-- **Episode deduplication confusion due to non-standard season numbering**: Smart deduplication during series search may produce incorrect results when some upstream Emby servers use non-standard season numbering. This does not affect playback order or viewing.
+- **Series duplication due to non-standard upstream servers**: Intelligent deduplication during series search might be messy for a few upstream servers with non-standard season divisions, but this doesn't affect the viewing order and experience.
 
 ## Disclaimer
 
@@ -210,7 +219,7 @@ The `playbackMode` setting determines how media streams are delivered to the cli
 
 | Mode | How it works | Best for |
 |------|-------------|----------|
-| `proxy` | Stream traffic flows through the aggregator. HLS manifests (`.m3u8`) are rewritten so segment URLs also route through the proxy. Supports Range requests, subtitles, and attachments. | Upstream has no public IP; you want to hide upstream URLs from clients |
+| `proxy` | Stream traffic flows through the aggregator. HLS manifests (`.m3u8`) are rewritten into proxy-relative paths, so playback no longer depends on `localhost` or a hard-coded public origin. Supports Range requests, subtitles, and attachments. | Upstream has no public IP; you want to hide upstream URLs from clients; you need reverse-proxy/public-domain compatibility |
 | `redirect` | Client receives a `302` redirect pointing directly to the upstream stream URL. No traffic passes through the aggregator after the redirect. | Client can reach upstream directly; saves proxy bandwidth |
 
 **Priority order:** per-server `playbackMode` > global `playback.mode` > `"proxy"` (default)
@@ -235,12 +244,12 @@ Controls which client identity the aggregator presents to each upstream server. 
 Passthrough uses a 3-tier header resolution:
 
 1. **Live request headers** — If the current request comes from a real Emby client (detected by the presence of `X-Emby-Client` header), those headers are used directly via `AsyncLocalStorage`.
-2. **Captured headers** — When a real client (Infuse, Emby iOS, etc.) logs into Emby-in-One, the proxy captures and stores the client's `User-Agent`, `X-Emby-Client`, `X-Emby-Device-Name`, and related headers. These are reused for subsequent requests.
+2. **Captured headers for the current token** — When a real client (Infuse, Emby iOS, etc.) logs into Emby-in-One, the proxy captures and stores that client's `User-Agent`, `X-Emby-Client`, `X-Emby-Device-Name`, and related headers under the current proxy token. Only requests with the same token reuse them.
 3. **Infuse fallback** — If no real client headers are available (e.g. right after server start), the Infuse profile is used as a safe default.
 
 Captured headers are merged on top of the Infuse base profile, so any missing fields are automatically filled by Infuse values. This means even clients that don't send all Emby headers (like some third-party apps) will present a complete identity.
 
-When a client logs in, all offline passthrough servers automatically re-attempt login with the newly captured headers.
+When a client logs in, all offline passthrough servers automatically re-attempt login with the newly captured headers. When a token is revoked or expires, its captured headers are removed too.
 
 ---
 
@@ -278,8 +287,8 @@ Items are merged using interleaved (round-robin) ordering across servers, then d
 Every upstream Item ID is mapped to a globally unique virtual ID (UUID format). Clients only ever see virtual IDs.
 
 - **Storage:** SQLite (WAL mode) preferred; automatic fallback to in-memory `Map`
-- **Mapping:** `virtualId <-> { originalId, serverIndex }`
-- **Persistence:** Survives restarts (with SQLite); in-memory mode loses mappings on restart
+- **Mapping:** `virtualId <-> { originalId, serverIndex }`, plus persisted `otherInstances` relationships for additional cross-server instances
+- **Persistence:** Survives restarts with SQLite, including additional-instance relationships used by multi-source details and fallback logic; in-memory mode loses mappings on restart
 - **Cleanup:** Deleting an upstream server automatically purges its mappings and adjusts remaining indices
 
 ---
@@ -327,7 +336,7 @@ Access at `http://your-ip:8096/admin`, log in with the admin credentials from yo
 
 ### Admin API
 
-All endpoints require authentication via `X-Emby-Token` header or `api_key` query parameter.
+All endpoints require authentication via `X-Emby-Token` header or `api_key` query parameter. For security, `/admin/api/*` is same-origin only and no longer reflects arbitrary cross-origin requests.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -417,9 +426,10 @@ src/
 └── utils/
     ├── logger.js               # Winston logging (Console + File dual transport)
     ├── id-rewriter.js          # Recursive ID virtualization / de-virtualization
-    ├── stream-proxy.js         # HTTP stream proxy (backpressure, redirect following, cleanup)
-    ├── captured-headers.js     # Store real client headers (for passthrough)
-    └── request-store.js        # AsyncLocalStorage for per-request header forwarding
+    ├── stream-proxy.js         # HTTP stream proxy (backpressure, redirects, relative HLS rewriting)
+    ├── captured-headers.js     # Store real client headers per proxy token (for passthrough)
+    ├── cors-policy.js          # Split CORS policy for admin vs client routes
+    └── request-store.js        # AsyncLocalStorage for per-request context forwarding
 
 public/
 └── admin.html                  # Vue 3 + Tailwind CSS admin panel SPA

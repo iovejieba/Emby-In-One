@@ -89,7 +89,16 @@ body { font-family: 'Inter', sans-serif; background-color: #f8fafc; color: #1e29
         <span class="font-medium">{{ p.name }}</span>
       </a>
     </nav>
-    <div class="p-4 border-t"><button @click="logout" class="flex items-center space-x-3 px-4 py-3 w-full text-slate-500 hover:text-red-600 transition-all"><i data-lucide="log-out" class="w-5 h-5"></i><span>退出登录</span></button></div>
+    <div class="p-4 border-t space-y-4">
+      <button @click="logout" class="flex items-center space-x-3 px-4 py-3 w-full text-slate-500 hover:text-red-600 transition-all">
+        <i data-lucide="log-out" class="w-5 h-5"></i>
+        <span>退出登录</span>
+      </button>
+      <div class="px-4 text-[10px] text-slate-400 font-medium">
+        <div>Emby-In-One</div>
+        <a href="https://github.com/ArizeSky/Emby-In-One" target="_blank" class="hover:text-blue-500 transition-colors">GitHub Repository</a>
+      </div>
+    </div>
   </aside>
 
   <!-- Main -->
@@ -164,11 +173,12 @@ body { font-family: 'Inter', sans-serif; background-color: #f8fafc; color: #1e29
       <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div class="space-y-4"><h3 class="text-xs font-bold text-slate-400 uppercase tracking-widest">系统设置</h3>
           <div><label class="block text-sm font-medium mb-1">系统名称</label><input type="text" v-model="settings.serverName" class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"></div>
-          <div><label class="block text-sm font-medium mb-1">默认播放模式</label><select v-model="settings.playbackMode" class="w-full px-4 py-2 border rounded-lg outline-none"><option value="proxy">代理模式 (Proxy)</option><option value="redirect">直连模式 (302)</option></select></div>
+          <div><label class="block text-sm font-medium mb-1">默认播放模式</label><select v-model="settings.playbackMode" class="w-full px-4 py-2 border rounded-lg outline-none"><option value="proxy">代理模式 (Proxy)</option><option value="redirect">直连模式 (302)</option></select><p v-if="settings.playbackMode === 'redirect'" class="mt-1 text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded p-2">⚠ 直连模式会将上游服务器的 Access Token 暴露在 302 重定向 URL 中，客户端可见。请确认您了解此安全风险。</p></div>
         </div>
         <div class="space-y-4"><h3 class="text-xs font-bold text-slate-400 uppercase tracking-widest">管理员账户</h3>
           <div><label class="block text-sm font-medium mb-1">管理用户名</label><input type="text" v-model="settings.adminUsername" class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"></div>
-          <div><label class="block text-sm font-medium mb-1">修改密码</label><input type="password" v-model="settings.adminPassword" placeholder="留空则不修改" class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"></div>
+          <div><label class="block text-sm font-medium mb-1">修改密码</label><input type="password" v-model="settings.adminPassword" autocomplete="new-password" placeholder="留空则不修改" class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"></div>
+          <div v-if="settings.adminPassword"><label class="block text-sm font-medium mb-1">当前密码（验证）</label><input type="password" v-model="settings.currentPassword" autocomplete="current-password" placeholder="请输入当前密码以确认修改" class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"></div>
         </div>
       </div>
       <div class="space-y-4">
@@ -208,7 +218,7 @@ body { font-family: 'Inter', sans-serif; background-color: #f8fafc; color: #1e29
           <div class="sm:col-span-2"><label class="text-sm font-medium">地址 (URL)</label><input type="text" v-model="serverForm.url" class="w-full px-4 py-2 border rounded-lg outline-none"></div>
           <div class="sm:col-span-2"><label class="text-sm font-medium">推流域名 (留空=与地址相同)</label><input type="text" v-model="serverForm.streamingUrl" placeholder="https://stream.example.com" class="w-full px-4 py-2 border rounded-lg outline-none"></div>
           <div><label class="text-sm font-medium">认证方式</label><select v-model="serverForm.authType" class="w-full px-4 py-2 border rounded-lg outline-none"><option value="password">用户名/密码</option><option value="apiKey">API Key</option></select></div>
-          <div><label class="text-sm font-medium">播放模式</label><select v-model="serverForm.playbackMode" class="w-full px-4 py-2 border rounded-lg outline-none"><option value="proxy">代理模式</option><option value="redirect">直连模式</option></select></div>
+          <div><label class="text-sm font-medium">播放模式</label><select v-model="serverForm.playbackMode" class="w-full px-4 py-2 border rounded-lg outline-none"><option value="proxy">代理模式</option><option value="redirect">直连模式</option></select><p v-if="serverForm.playbackMode === 'redirect'" class="mt-1 text-xs text-amber-600">⚠ 直连模式会暴露上游 Token</p></div>
           <div><label class="text-sm font-medium">UA 伪装</label><select v-model="serverForm.spoofClient" class="w-full px-4 py-2 border rounded-lg outline-none"><option value="none">无</option><option value="passthrough">透传客户端</option><option value="infuse">Infuse</option><option value="official">官方 Web</option></select></div>
           <div><label class="text-sm font-medium">自动 302</label><select v-model="serverForm.followRedirects" class="w-full px-4 py-2 border rounded-lg outline-none"><option :value="true">开启</option><option :value="false">关闭</option></select></div>
           <div><label class="text-sm font-medium">使用网络代理</label><select v-model="serverForm.proxyId" class="w-full px-4 py-2 border rounded-lg outline-none"><option :value="null">不使用</option><option v-for="p in proxyList" :key="p.id" :value="p.id">{{ p.name }}</option></select></div>
@@ -256,7 +266,7 @@ createApp({
       ],
       stats: { upstreamCount: 0, upstreamOnline: 0, idMappings: { mappingCount: 0, persistent: true }, upstream: [] },
       upstreamList: [], proxyList: [],
-      settings: { serverName: '', playbackMode: 'proxy', adminUsername: '', adminPassword: '', timeouts: { api: 30000, global: 15000, login: 10000, healthCheck: 10000, healthInterval: 60000 } },
+      settings: { serverName: '', playbackMode: 'proxy', adminUsername: '', adminPassword: '', currentPassword: '', timeouts: { api: 30000, global: 15000, login: 10000, healthCheck: 10000, healthInterval: 60000 } },
       logs: [], isLoadingLogs: false, saveSuccess: false,
       logLevelFilter: 'ALL', logSearch: '',
       showModal: false, editIndex: null, serverForm: {},
@@ -314,8 +324,8 @@ createApp({
     async refreshClientInfo() { try { this.clientInfo = await this.api('/admin/api/client-info'); } catch(e) {} this.$nextTick(()=>lucide.createIcons()); },
     async refreshServers() { this.upstreamList = await this.api('/admin/api/upstream'); this.refreshProxies(); this.$nextTick(()=>lucide.createIcons()); },
     async refreshProxies() { this.proxyList = await this.api('/admin/api/proxies'); this.$nextTick(()=>lucide.createIcons()); },
-    async refreshSettings() { const s = await this.api('/admin/api/settings'); this.settings = { ...s, adminPassword: '', timeouts: s.timeouts || { api: 30000, global: 15000, login: 10000, healthCheck: 10000, healthInterval: 60000 } }; },
-    async saveSettings() { await this.api('/admin/api/settings', { method:'PUT', body:JSON.stringify(this.settings) }); this.saveSuccess = true; setTimeout(()=>this.saveSuccess=false,3000); },
+    async refreshSettings() { const s = await this.api('/admin/api/settings'); this.settings = { ...s, adminPassword: '', currentPassword: '', timeouts: s.timeouts || { api: 30000, global: 15000, login: 10000, healthCheck: 10000, healthInterval: 60000 } }; },
+    async saveSettings() { const res = await this.api('/admin/api/settings', { method:'PUT', body:JSON.stringify(this.settings) }); if (res.error) { alert(res.error); return; } this.saveSuccess = true; this.settings.adminPassword = ''; this.settings.currentPassword = ''; setTimeout(()=>this.saveSuccess=false,3000); },
     async refreshLogs() { this.isLoadingLogs = true; try { this.logs = await this.api('/admin/api/logs?limit=500'); this.$nextTick(() => { const b=this.$refs.logBox; if(b) b.scrollTop=b.scrollHeight; lucide.createIcons(); }); } finally { this.isLoadingLogs=false; } },
     downloadLogs() {
       const t = localStorage.getItem('eio_token');

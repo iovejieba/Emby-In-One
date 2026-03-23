@@ -2,6 +2,7 @@ const path = require('path');
 const express = require('express');
 const logger = require('./utils/logger');
 const requestStore = require('./utils/request-store');
+const { applyCorsHeaders } = require('./utils/cors-policy');
 
 // Optional gzip compression — install with: npm install compression
 let compression;
@@ -36,11 +37,9 @@ function createApp(config, idManager, upstreamManager) {
     logger.info('Response compression enabled');
   }
 
-  // CORS
+  // CORS — admin API is same-origin only, Emby client routes stay permissive
   app.use((req, res, next) => {
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Emby-Token, X-Emby-Authorization, X-Emby-Client, X-Emby-Client-Version, X-Emby-Device-Name, X-Emby-Device-Id');
+    applyCorsHeaders(req, res);
     if (req.method === 'OPTIONS') {
       return res.status(200).end();
     }
@@ -50,13 +49,16 @@ function createApp(config, idManager, upstreamManager) {
   // JSON body parser
   app.use(express.json({ limit: '10mb' }));
 
-  // Store original client headers for passthrough mode (AsyncLocalStorage)
-  app.use((req, res, next) => {
-    requestStore.run(req.headers, next);
-  });
-
   // Auth middleware (extracts token, doesn't require it)
   app.use(createAuthMiddleware(authManager));
+
+  // Store request-scoped client context for passthrough mode
+  app.use((req, res, next) => {
+    requestStore.run({
+      headers: req.headers,
+      proxyToken: req.proxyToken || null,
+    }, () => next());
+  });
 
   // Request context (ID resolution helpers)
   app.use(createRequestContext(idManager, upstreamManager));
@@ -64,7 +66,6 @@ function createApp(config, idManager, upstreamManager) {
   // Request logging
   app.use((req, res, next) => {
     const start = Date.now();
-    // Log auth token source for debugging
     const tokenSource = req.headers['x-emby-token'] ? 'X-Emby-Token'
       : (req.query.api_key || req.query.ApiKey) ? 'api_key'
       : req.headers['x-emby-authorization'] ? 'X-Emby-Authorization'
@@ -88,7 +89,7 @@ function createApp(config, idManager, upstreamManager) {
   // Admin panel: static files + API
   app.use('/admin', express.static(path.resolve(__dirname, '..', 'public')));
   app.get('/admin', (req, res) => res.redirect('/admin/admin.html'));
-  app.use('/admin', createAdminRoutes(config, idManager, upstreamManager));
+  app.use('/admin', createAdminRoutes(config, idManager, upstreamManager, authManager));
 
   // System info (some endpoints don't need auth)
   app.use('/', createSystemRoutes(config));

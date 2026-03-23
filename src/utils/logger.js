@@ -35,7 +35,7 @@ function setDataDir(dataDir) {
   const logFile = path.join(dir, 'emby-in-one.log');
   fileTransport = new winston.transports.File({
     filename: logFile,
-    level: 'debug',
+    level: process.env.FILE_LOG_LEVEL || 'info',
     maxsize: 5 * 1024 * 1024,
     maxFiles: 1,
     tailable: true,

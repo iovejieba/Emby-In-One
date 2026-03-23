@@ -163,8 +163,8 @@ function rewriteRequestIds(obj, idManager) {
  * Modifies items in-place — no deep clone needed.
  */
 function rewriteResponseArray(items, serverIndices, idManager, proxyServerId, proxyUserId) {
-  const seen = new Set();
   for (let i = 0; i < items.length; i++) {
+    const seen = new Set(); // Isolate per item to allow GC of earlier items
     rewriteResponseIds(items[i], serverIndices[i], idManager, proxyServerId, proxyUserId, seen);
   }
 }

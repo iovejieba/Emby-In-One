@@ -1,6 +1,8 @@
 # Emby-In-One
 
-[English](README_EN.md) | [GitHub](https://github.com/ArizeSky/Emby-In-One)
+> **Version: V1.2**
+
+[English](README_EN.md) | [更新日志](Update.md) | [更新计划](Update%20Plan.md) | [GitHub](https://github.com/ArizeSky/Emby-In-One)
 
 多台 Emby 服务器聚合代理，将多个上游 Emby 服务器的媒体库合并为一个统一入口，支持任何标准 Emby 客户端访问。
 
@@ -26,18 +28,18 @@ Emby连接地址：https://emby.cothx.eu.cc/
 
 - **多服务器聚合** — 将多台 Emby 服务器的媒体库、搜索结果、元数据合并展示
 - **智能去重** — **仅作用于搜索功能**：搜索时相同影片（基于 TMDB ID 或 标题+年份）自动合并，保留多版本 MediaSource 可选播放；在媒体库页面中点击某个库，数据直接来自该库所属的上游服务器，不做跨库合并
-- **客户端透传 (Passthrough)** — 将真实客户端身份（UA、设备信息）透传给上游服务器，绕过客户端白名单限制
+- **系列级观看历史隔离** — 搜索结果中的剧集仍可跨服务器聚合展示，但进入某个剧集后的 `Resume` / `NextUp` 会优先使用该搜索结果所属的主实例；仅当主实例没有有效结果时才顺序回退到同剧的其他实例，不再把多个服务器的观看进度混合显示
+- **客户端透传 (Passthrough)** — 将真实客户端身份（UA、设备信息）按代理 Token 隔离透传给上游服务器，避免多设备串用同一份客户端身份
 - **UA 伪装** — 支持伪装为 Infuse、Emby Web 官方客户端
-- **双播放模式** — 代理模式（流量经代理转发）/ 直连模式（302 重定向到上游）
+- **双播放模式** — 代理模式（流量经代理转发，HLS 清单重写为相对代理路径）/ 直连模式（302 重定向到上游）
 - **网络代理池** — 每台上游服务器可独立配置 HTTP/HTTPS 代理
 - **持久化日志** — 自动写入文件，5MB 轮转，支持网页下载和清空
-- **Web 管理面板** — 服务器增删改查、实时日志查看、全局设置
+- **Web 管理面板** — 服务器增删改查、实时日志查看、全局设置；上游配置采用草稿校验后再提交
 
 ---
 
 ## 已知问题
 
-- **继续观看关联错误**：剧集的「继续观看」条目可能显示并跳转至与该剧集无关的其他剧集或电影内容，暂未修复。
 - **因Emby服务器服务器不规范导致的剧集混乱**：剧集搜索时的智能去重，由于少数Emby服务器分季不规范，可能导致剧集去重混乱，但不影响顺序和观看。
 
 ## 免责声明
@@ -217,7 +219,7 @@ upstream:
 
 | 模式 | 工作原理 | 适用场景 |
 |------|---------|---------|
-| `proxy` | 流量经代理服务器转发。HLS 清单（`.m3u8`）中的分片 URL 会被重写为代理地址。支持 Range 请求、字幕、附件。 | 上游无公网 IP；需要对客户端隐藏上游地址 |
+| `proxy` | 流量经代理服务器转发。HLS 清单（`.m3u8`）中的分片 URL 会被重写为相对代理路径，不再依赖 `localhost` 或固定外网域名。支持 Range 请求、字幕、附件。 | 上游无公网 IP；需要对客户端隐藏上游地址；需要兼容反向代理/公网域名 |
 | `redirect` | 客户端收到 `302` 重定向，直接连接上游流地址。重定向后流量不经过代理。 | 客户端可直连上游；节省代理带宽 |
 
 **优先级**: 单服务器 `playbackMode` > 全局 `playback.mode` > `"proxy"`（默认）
@@ -242,12 +244,12 @@ upstream:
 Passthrough 使用三级 header 解析：
 
 1. **实时请求头** — 如果当前请求来自真实 Emby 客户端（检测到 `X-Emby-Client` 头），直接通过 `AsyncLocalStorage` 使用这些头。
-2. **已捕获的头** — 当真实客户端（Infuse、Emby iOS 等）登录 Emby-in-One 时，代理捕获并存储客户端的 `User-Agent`、`X-Emby-Client`、`X-Emby-Device-Name` 等头信息，后续请求复用。
+2. **当前 Token 的已捕获头** — 当真实客户端（Infuse、Emby iOS 等）登录 Emby-in-One 时，代理会按当前代理 Token 捕获并存储客户端的 `User-Agent`、`X-Emby-Client`、`X-Emby-Device-Name` 等头信息；后续仅由同一 Token 的请求复用。
 3. **Infuse 兜底** — 如果没有可用的真实客户端头（如刚启动时），使用 Infuse 身份作为安全默认值。
 
 捕获的头会叠加在 Infuse 基础 profile 之上，所以即使客户端没有发送所有 Emby 头字段（如某些第三方 App），也能呈现完整的客户端身份。
 
-当客户端登录时，所有离线的 passthrough 服务器会自动使用新捕获的头重新尝试登录。
+当客户端登录时，所有离线的 passthrough 服务器会自动使用新捕获的头重新尝试登录。Token 撤销或过期时，其对应捕获头也会一并清理。
 
 ---
 
@@ -285,8 +287,8 @@ Passthrough 使用三级 header 解析：
 每个上游 Item ID 被映射为全局唯一的虚拟 ID（UUID 格式）。客户端看到的所有 ID 都是虚拟的。
 
 - **存储**: SQLite（WAL 模式）优先，不可用时自动降级到内存 `Map`
-- **映射关系**: `virtualId <-> { originalId, serverIndex }`
-- **持久化**: 重启后无需重新建立映射（使用 SQLite 时）；内存模式重启后 ID 重置
+- **映射关系**: `virtualId <-> { originalId, serverIndex }`，并额外持久化附加实例关系 `otherInstances`
+- **持久化**: 重启后无需重新建立映射（使用 SQLite 时）；主实例与附加实例关系都会恢复；内存模式重启后 ID 重置
 - **清理**: 删除上游服务器时自动清理该服务器的所有映射并修正后续索引
 
 ---
@@ -333,7 +335,7 @@ Passthrough 使用三级 header 解析：
 
 ### 管理 API
 
-所有 API 需要认证（`X-Emby-Token` 头或 `api_key` 查询参数）。
+所有 API 需要认证（`X-Emby-Token` 头或 `api_key` 查询参数）。出于安全考虑，`/admin/api/*` 仅按同源方式开放，不再为任意跨域来源返回放行头。
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -424,9 +426,10 @@ src/
 └── utils/
     ├── logger.js               # Winston 日志（Console + File 双 transport）
     ├── id-rewriter.js          # ID 虚拟化/反虚拟化递归重写
-    ├── stream-proxy.js         # HTTP 流代理（背压、重定向跟随、清理）
-    ├── captured-headers.js     # 捕获真实客户端请求头（passthrough 用）
-    └── request-store.js        # AsyncLocalStorage 请求头透传
+    ├── stream-proxy.js         # HTTP 流代理（背压、重定向跟随、HLS 相对路径重写）
+    ├── captured-headers.js     # 按 token 捕获真实客户端请求头（passthrough 用）
+    ├── cors-policy.js          # Admin/客户端分级 CORS 策略
+    └── request-store.js        # AsyncLocalStorage 请求上下文透传
 
 public/
 └── admin.html                  # Vue 3 + Tailwind CSS 管理面板 SPA

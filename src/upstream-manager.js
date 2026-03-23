@@ -110,6 +110,9 @@ function createUpstreamManager(config, idManager) {
       if (item.Type === 'Movie' || item.Type === 'Series') {
         return `name:${(item.Name || '').toLowerCase()}:${item.ProductionYear || ''}`;
       }
+      if (item.Type === 'Episode' && item.SeriesName && item.ParentIndexNumber != null && item.IndexNumber != null) {
+        return `ep:${item.SeriesName.toLowerCase()}:S${item.ParentIndexNumber}E${item.IndexNumber}`;
+      }
       return null;
     }
 

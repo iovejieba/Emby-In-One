@@ -22,7 +22,6 @@ function createUserRoutes(config, authManager, idManager, upstreamManager) {
     const { Username, Pw, Password } = req.body;
     const password = Pw || Password || '';
 
-    // Log client identification headers
     const clientInfo = {
       userAgent: req.headers['user-agent'],
       client: req.headers['x-emby-client'],
@@ -41,17 +40,15 @@ function createUserRoutes(config, authManager, idManager, upstreamManager) {
 
     logger.info(`Login success: user="${Username}" ip=${req.ip}`);
 
-    // Capture real client headers for passthrough mode
-    capturedHeaders.set(req.headers);
+    capturedHeaders.set(result.AccessToken, req.headers);
     const ua = req.headers['user-agent'] || 'unknown';
     const client = req.headers['x-emby-client'] || '';
-    logger.info(`Captured client headers: ${client ? client + ' / ' : ''}${ua}`);
+    logger.info(`Captured client headers for token ${result.AccessToken.substring(0, 8)}...: ${client ? client + ' / ' : ''}${ua}`);
 
-    // Auto re-login offline passthrough servers with the real client identity
     for (const c of upstreamManager.clients) {
       if (!c.online && c.config.spoofClient === 'passthrough') {
         logger.info(`[${c.name}] Re-trying login with captured client headers...`);
-        c.login().catch(() => {});
+        c.login().catch((err) => { logger.debug(`[${c.name}] Passthrough login retry failed: ${err.message}`); });
       }
     }
 
@@ -91,8 +88,6 @@ function createUserRoutes(config, authManager, idManager, upstreamManager) {
         .filter(r => r.status === 'fulfilled')
         .map(r => r.value);
 
-      // Keep ALL views from ALL servers — each gets its own virtual ID
-      // Use "serverIndex:CollectionType" to avoid showing duplicates only within the same server
       const allViews = [];
       for (const { serverIndex, data } of successResults) {
         const items = data.Items || [];
@@ -101,10 +96,9 @@ function createUserRoutes(config, authManager, idManager, upstreamManager) {
             JSON.parse(JSON.stringify(item)),
             serverIndex, idManager, config.server.id, authManager.getProxyUserId()
           );
-          // Tag the view name with server name to distinguish same-type libraries
-          const client = upstreamManager.getClient(serverIndex);
-          if (client && onlineClients.length > 1) {
-            rewritten.Name = `${rewritten.Name} (${client.name})`;
+          const sourceClient = upstreamManager.getClient(serverIndex);
+          if (sourceClient && onlineClients.length > 1) {
+            rewritten.Name = `${rewritten.Name} (${sourceClient.name})`;
           }
           allViews.push(rewritten);
         }

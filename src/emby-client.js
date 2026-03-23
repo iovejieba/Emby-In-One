@@ -69,9 +69,6 @@ class EmbyClient {
       healthCheck: timeouts.healthCheck || 10000,
     };
 
-    // Do NOT set default Emby headers on the axios instance.
-    // All headers are set per-request to avoid merge conflicts
-    // between passthrough captured headers and spoof profiles.
     const axiosConfig = {
       baseURL: this.baseUrl,
       timeout: this.timeouts.api,
@@ -79,7 +76,6 @@ class EmbyClient {
       httpsAgent: keepAliveHttpsAgent,
     };
 
-    // Apply proxy if configured
     if (serverConfig.proxyId) {
       const proxyInfo = allProxies.find(p => p.id === serverConfig.proxyId);
       if (proxyInfo && proxyInfo.url) {
@@ -129,18 +125,19 @@ class EmbyClient {
 
   /**
    * Get the best available headers for passthrough mode.
-   * Always returns a COMPLETE set of headers with Infuse as base,
-   * overridden by captured/live client headers where available.
-   * This ensures servers that check X-Emby-Client etc. always see valid values,
-   * even when the client (e.g. Hills) doesn't send them.
+   * Priority:
+   *   1. Current request's live client headers
+   *   2. Captured headers for the current proxy token
+   *   3. Fixed Infuse fallback
    */
   _getPassthroughHeaders() {
     let captured = null;
     let source = 'infuse-fallback';
 
-    // 1. Current request's real headers (via AsyncLocalStorage)
-    //    Only use if they contain x-emby-client (i.e. an actual Emby client, not a browser)
-    const liveHeaders = requestStore.getStore();
+    const requestContext = requestStore.getStore() || null;
+    const liveHeaders = requestContext?.headers || null;
+    const proxyToken = requestContext?.proxyToken || null;
+
     if (liveHeaders && liveHeaders['x-emby-client']) {
       captured = {};
       for (const k of PASSTHROUGH_HEADERS) {
@@ -149,19 +146,14 @@ class EmbyClient {
       source = 'live-request';
     }
 
-    // 2. Captured headers from last client login to emby-in-one
-    if (!captured) {
-      const saved = capturedHeaders.get();
+    if (!captured && proxyToken) {
+      const saved = capturedHeaders.get(proxyToken);
       if (saved) {
         captured = { ...saved };
-        source = 'captured';
+        source = 'captured-token';
       }
     }
 
-    // Build complete headers: start with Infuse base (Title-Case),
-    // then override with captured values where available.
-    // This ensures all X-Emby-* fields are always present even if the
-    // client (e.g. Hills) doesn't send them.
     const headers = { ...SPOOF_PROFILES.infuse };
     if (captured) {
       if (captured['user-agent']) headers['User-Agent'] = captured['user-agent'];
@@ -232,7 +224,6 @@ class EmbyClient {
       return;
     }
 
-    // Determine which headers to use for login
     const isPassthrough = this.config.spoofClient === 'passthrough';
     let loginHeaders;
     let headerSource;
@@ -289,7 +280,7 @@ class EmbyClient {
       }
       if ((status === 401 || status === 403) && isPassthrough) {
         logger.warn(`[${this.name}] Passthrough ${status} — sent identity: Client="${clientName}", Device="${deviceName}", DeviceId="${deviceId}", UA="${userAgent}"`);
-        logger.warn(`[${this.name}] Passthrough ${status} — header source: "${headerSource}". If "infuse-fallback", no real client has connected yet.`);
+        logger.warn(`[${this.name}] Passthrough ${status} — header source: "${headerSource}". If "infuse-fallback", no matching real client identity was available.`);
       }
       this.online = false;
     }
@@ -365,8 +356,6 @@ class EmbyClient {
 
       await this.http.get('/System/Info/Public', { timeout: this.timeouts.healthCheck, headers });
 
-      // Server is reachable. But if we have no valid userId (login previously
-      // failed), don't just set online=true — attempt re-login first.
       if (!this.userId && !this.config.apiKey) {
         logger.info(`[${this.name}] Server reachable but not authenticated, attempting re-login...`);
         await this.login();

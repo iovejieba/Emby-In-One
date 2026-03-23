@@ -1,7 +1,36 @@
 const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const logger = require('./utils/logger');
+const capturedHeaders = require('./utils/captured-headers');
+
+/**
+ * Hash a plaintext password using scrypt with a random salt.
+ * Returns "salt:hash" hex string.
+ */
+function hashPassword(plain) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(plain, salt, 64).toString('hex');
+  return `${salt}:${hash}`;
+}
+
+/**
+ * Verify a plaintext password against a "salt:hash" string.
+ * Also accepts plaintext stored passwords for migration.
+ */
+function verifyPassword(plain, stored) {
+  if (!stored || !plain) return false;
+  if (!stored.includes(':')) {
+    return stored === plain;
+  }
+  const [salt, hash] = stored.split(':');
+  const derived = crypto.scryptSync(plain, salt, 64).toString('hex');
+  return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(derived, 'hex'));
+}
+
+// Token TTL: 48 hours
+const TOKEN_TTL_MS = 48 * 60 * 60 * 1000;
 
 /**
  * Proxy-level authentication manager.
@@ -11,26 +40,21 @@ const logger = require('./utils/logger');
 function createAuthManager(config) {
   let TOKEN_FILE = path.resolve(__dirname, '..', 'data', 'tokens.json');
 
-  // In Docker, prefer /app/data/tokens.json
   const DOCKER_DATA_DIR = '/app/data';
   if (fs.existsSync(DOCKER_DATA_DIR)) {
     TOKEN_FILE = path.join(DOCKER_DATA_DIR, 'tokens.json');
   }
 
-  // token → { userId, username, createdAt }
   const tokens = new Map();
 
-  // The proxy's own virtual user ID — loaded from disk or generated once
   let proxyUserId;
   let savedHadProxyUserId = false;
 
-  // Load persisted tokens from disk
   try {
     const dir = path.dirname(TOKEN_FILE);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     if (fs.existsSync(TOKEN_FILE)) {
       const saved = JSON.parse(fs.readFileSync(TOKEN_FILE, 'utf8'));
-      // proxyUserId is stored as a top-level field, separate from tokens
       if (saved._proxyUserId) {
         proxyUserId = saved._proxyUserId;
         savedHadProxyUserId = true;
@@ -44,7 +68,6 @@ function createAuthManager(config) {
     logger.warn(`Could not load persisted tokens: ${err.message}`);
   }
 
-  // Generate proxyUserId if not loaded from disk
   if (!proxyUserId) {
     proxyUserId = uuidv4().replace(/-/g, '');
   }
@@ -52,8 +75,11 @@ function createAuthManager(config) {
   function saveTokens() {
     try {
       const obj = { _proxyUserId: proxyUserId };
+      const now = Date.now();
       for (const [token, info] of tokens.entries()) {
-        obj[token] = info;
+        if (now - info.createdAt < TOKEN_TTL_MS) {
+          obj[token] = info;
+        }
       }
       fs.writeFileSync(TOKEN_FILE, JSON.stringify(obj, null, 2), 'utf8');
     } catch (err) {
@@ -61,18 +87,20 @@ function createAuthManager(config) {
     }
   }
 
-  // Persist proxyUserId immediately if it was just generated or was missing from disk
   if (!savedHadProxyUserId) {
     saveTokens();
   }
 
-  /**
-   * Authenticate a user against the proxy's admin credentials.
-   * Returns an Emby-compatible auth response or null on failure.
-   */
   function authenticate(username, password) {
-    if (username !== config.admin.username || password !== config.admin.password) {
+    if (username !== config.admin.username || !verifyPassword(password, config.admin.password)) {
       return null;
+    }
+
+    if (!config.admin.password.includes(':')) {
+      config.admin.password = hashPassword(password);
+      const { saveConfig } = require('./config');
+      saveConfig(config);
+      logger.info('Admin password migrated to hashed storage');
     }
 
     const token = uuidv4().replace(/-/g, '');
@@ -107,22 +135,38 @@ function createAuthManager(config) {
 
   /**
    * Validate a token. Returns the token info or null.
+   * Tokens expire after TOKEN_TTL_MS (48 hours).
    */
   function validateToken(token) {
     if (!token) return null;
-    return tokens.get(token) || null;
+    const info = tokens.get(token);
+    if (!info) return null;
+    if (Date.now() - info.createdAt >= TOKEN_TTL_MS) {
+      tokens.delete(token);
+      capturedHeaders.delete(token);
+      saveTokens();
+      return null;
+    }
+    return info;
   }
 
   /**
-   * Get the proxy user ID.
+   * Revoke a token (logout).
    */
+  function revokeToken(token) {
+    if (!token) return false;
+    const deleted = tokens.delete(token);
+    if (deleted) {
+      capturedHeaders.delete(token);
+      saveTokens();
+    }
+    return deleted;
+  }
+
   function getProxyUserId() {
     return proxyUserId;
   }
 
-  /**
-   * Build an Emby-compatible user object for the proxy admin.
-   */
   function buildUserObject() {
     return {
       Name: config.admin.username,
@@ -170,9 +214,12 @@ function createAuthManager(config) {
   return {
     authenticate,
     validateToken,
+    revokeToken,
     getProxyUserId,
     buildUserObject,
+    hashPassword,
+    verifyPassword,
   };
 }
 
-module.exports = { createAuthManager };
+module.exports = { createAuthManager, hashPassword, verifyPassword };

@@ -6,30 +6,31 @@ const requestStore = require('./request-store');
 
 /**
  * Rewrite HLS manifest (.m3u8) content so that segment/playlist URLs
- * point back to the proxy instead of the upstream server directly.
+ * point back to the proxy via relative paths instead of absolute origins.
+ *
  * @param {string} content - Raw m3u8 text from upstream
- * @param {string} upstreamBase - Upstream server base URL (protocol + host)
- * @param {string} proxyBase - Proxy base URL for the client (e.g. http://proxy:8096)
- * @param {string} proxyToken - Proxy auth token to append
+ * @param {string} upstreamBase - Upstream manifest URL used to resolve relative lines
+ * @param {string} proxyToken - Proxy auth token to append as api_key
  */
-function rewriteM3u8(content, upstreamBase, proxyBase, proxyToken) {
+function rewriteM3u8(content, upstreamBase, proxyToken) {
   return content.replace(/^(?!#)(.+)$/gm, (line) => {
-    line = line.trim();
-    if (!line) return line;
-    let fullUrl;
+    const trimmed = line.trim();
+    if (!trimmed) return trimmed;
+
+    let resolvedUrl;
     try {
-      fullUrl = new URL(line, upstreamBase).toString();
-    } catch (e) {
-      return line; // not a URL, leave as-is
+      resolvedUrl = new URL(trimmed, upstreamBase);
+    } catch (_err) {
+      return trimmed;
     }
-    // Rebuild as a path relative to proxyBase with api_key
-    const u = new URL(fullUrl);
-    u.searchParams.delete('api_key');
-    u.searchParams.delete('ApiKey');
-    if (proxyToken) u.searchParams.set('api_key', proxyToken);
-    // Use proxy origin but keep the upstream path+query
-    const proxyOrigin = new URL(proxyBase);
-    return `${proxyOrigin.origin}${u.pathname}${u.search}`;
+
+    resolvedUrl.searchParams.delete('api_key');
+    resolvedUrl.searchParams.delete('ApiKey');
+    if (proxyToken) {
+      resolvedUrl.searchParams.set('api_key', proxyToken);
+    }
+
+    return `${resolvedUrl.pathname}${resolvedUrl.search}`;
   });
 }
 
@@ -74,11 +75,12 @@ function proxyStream(upstreamUrl, token, req, res, extraHeaders = {}, followCoun
     if (req.headers.range) options.headers['Range'] = req.headers.range;
     if (req.headers.accept) options.headers['Accept'] = req.headers.accept;
     if (token) options.headers['X-Emby-Token'] = token;
-    // Forward User-Agent from original client as fallback (important for servers with client whitelists)
+
     if (!options.headers['User-Agent'] && !options.headers['user-agent']) {
-      const clientHeaders = requestStore.getStore();
-      if (clientHeaders && clientHeaders['user-agent']) {
-        options.headers['User-Agent'] = clientHeaders['user-agent'];
+      const requestContext = requestStore.getStore();
+      const liveHeaders = requestContext?.headers || null;
+      if (liveHeaders && liveHeaders['user-agent']) {
+        options.headers['User-Agent'] = liveHeaders['user-agent'];
       }
     }
 
@@ -91,13 +93,11 @@ function proxyStream(upstreamUrl, token, req, res, extraHeaders = {}, followCoun
         logger.warn(`Stream ${statusCode} from ${parsed.hostname}: path=${parsed.pathname.substring(0, 80)} sentHeaders=${JSON.stringify(Object.keys(options.headers))}`);
       }
 
-      // Handle Redirects
       if ([301, 302, 303, 307, 308].includes(statusCode) && upstreamRes.headers.location) {
         let redirectUrl = upstreamRes.headers.location;
         if (!redirectUrl.startsWith('http')) {
           redirectUrl = new URL(redirectUrl, upstreamUrl).toString();
         }
-        // logger.debug(`Following redirect to: ${redirectUrl}`);
         upstreamRes.destroy();
         return proxyStream(redirectUrl, token, req, res, extraHeaders, followCount + 1).then(done);
       }
@@ -118,7 +118,6 @@ function proxyStream(upstreamUrl, token, req, res, extraHeaders = {}, followCoun
         if (upstreamRes.headers[h]) res.set(h, upstreamRes.headers[h]);
       }
 
-      // Destroy upstream on client disconnect
       function cleanup() {
         if (!upstreamRes.destroyed) upstreamRes.destroy();
         if (!upstreamReq.destroyed) upstreamReq.destroy();
@@ -129,18 +128,16 @@ function proxyStream(upstreamUrl, token, req, res, extraHeaders = {}, followCoun
       req.on('aborted', cleanup);
       res.on('close', cleanup);
 
-      // Rewrite HLS manifest segment URLs so they route through the proxy
       const contentType = upstreamRes.headers['content-type'] || '';
       const isM3u8 = contentType.includes('mpegurl') || parsed.pathname.endsWith('.m3u8');
 
-      if (isM3u8 && req._proxyBase) {
-        // Buffer the manifest, rewrite URLs, then send
+      if (isM3u8) {
         res.removeHeader('content-length');
         let body = '';
         upstreamRes.setEncoding('utf8');
         upstreamRes.on('data', chunk => { body += chunk; });
         upstreamRes.on('end', () => {
-          const rewritten = rewriteM3u8(body, upstreamUrl, req._proxyBase, req._proxyToken);
+          const rewritten = rewriteM3u8(body, upstreamUrl, req._proxyToken);
           res.set('content-type', 'application/x-mpegURL');
           res.end(rewritten);
           done();
