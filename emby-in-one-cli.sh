@@ -90,7 +90,7 @@ print_line() {
 print_kv() {
   local label="$1"
   local value="$2"
-  printf "  ${DIM}%-14s${NC} %s\n" "$label" "$value"
+  printf "  ${DIM}%-14s${NC} %b\n" "$label" "$value"
 }
 
 # ── 将秒数转为可读时长 ──
@@ -144,12 +144,15 @@ do_stop() {
   echo -e "${GREEN}✔ 服务已关闭${NC}"
 }
 
+GITHUB_REPO="ArizeSky/Emby-In-One"
+REPO_TARBALL="https://github.com/${GITHUB_REPO}/archive/refs/heads/main.tar.gz"
+
 do_update() {
   if [[ "$DEPLOY_MODE" == "binary" ]]; then
     echo -e "${CYAN}▶ 正在通过 release-install.sh 更新服务...${NC}"
     echo ""
     local tmp_script="/tmp/emby-in-one-release-install-$$.sh"
-    if curl -fsSL --max-time 30 -o "${tmp_script}" "https://raw.githubusercontent.com/ArizeSky/Emby-In-One/main/release-install.sh"; then
+    if curl -fsSL --max-time 30 -o "${tmp_script}" "https://raw.githubusercontent.com/${GITHUB_REPO}/main/release-install.sh"; then
       bash "${tmp_script}"
       rm -f "${tmp_script}"
     else
@@ -157,10 +160,97 @@ do_update() {
       return 1
     fi
   else
-    echo -e "${CYAN}▶ 正在重新构建并更新服务...${NC}"
+    echo -e "${CYAN}▶ 正在拉取最新源码并重新构建...${NC}"
     echo ""
+
+    # ── 1. 下载最新源码到临时目录 ──
+    local tmp_dir
+    tmp_dir=$(mktemp -d)
+    echo -e "  ${DIM}从 GitHub 下载最新代码...${NC}"
+    if ! curl -fsSL --max-time 120 "${REPO_TARBALL}" | tar -xz -C "${tmp_dir}" --strip-components=1; then
+      rm -rf "${tmp_dir}"
+      echo -e "${RED}✘ 下载源码失败，请检查网络${NC}"
+      return 1
+    fi
+
+    # ── 2. 定位源码根目录（支持独立发行和根仓库两种结构）──
+    local src_dir=""
+    # 优先：独立发行目录（根目录有 cmd/ internal/ go.mod）
+    if [[ -d "${tmp_dir}/cmd" && -d "${tmp_dir}/internal" && -f "${tmp_dir}/go.mod" ]]; then
+      src_dir="${tmp_dir}"
+    # 其次：根仓库的 Emby-In-One-Go 子目录
+    elif [[ -d "${tmp_dir}/Emby-In-One-Go/cmd" && -f "${tmp_dir}/Emby-In-One-Go/go.mod" ]]; then
+      src_dir="${tmp_dir}/Emby-In-One-Go"
+    fi
+
+    if [[ -z "$src_dir" ]]; then
+      rm -rf "${tmp_dir}"
+      echo -e "${RED}✘ 下载内容中未找到可部署的 Go 项目文件${NC}"
+      return 1
+    fi
+
+    # ── 3. 替换源码（保留 config/ data/ log/ 用户数据）──
+    echo -e "  ${DIM}更新项目文件...${NC}"
+    for item in cmd internal third_party public go.mod; do
+      rm -rf "${PROJECT_DIR:?}/${item}"
+      if [[ -e "${src_dir}/${item}" ]]; then
+        cp -r "${src_dir}/${item}" "${PROJECT_DIR}/"
+      fi
+    done
+    # 更新可选文件（文档、CLI 脚本等）
+    for item in README.md README_EN.md Update.md emby-in-one-cli.sh .dockerignore LICENSE; do
+      if [[ -e "${src_dir}/${item}" ]]; then
+        cp -f "${src_dir}/${item}" "${PROJECT_DIR}/"
+      fi
+    done
+
+    # ── 4. 重新生成 Dockerfile 和 docker-compose.yml ──
+    echo -e "  ${DIM}生成构建文件...${NC}"
+    cat > "${PROJECT_DIR}/Dockerfile" <<'DEOF'
+FROM golang:1.26-bookworm AS builder
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential ca-certificates && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY go.mod ./
+COPY third_party ./third_party
+COPY cmd ./cmd
+COPY internal ./internal
+RUN mkdir -p /out && CGO_ENABLED=1 go build -o /out/emby-in-one ./cmd/emby-in-one
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+RUN mkdir -p /app/config /app/data /app/public
+COPY public ./public
+COPY --from=builder /out/emby-in-one ./emby-in-one
+EXPOSE 8096
+CMD ["./emby-in-one"]
+DEOF
+
+    cat > "${PROJECT_DIR}/docker-compose.yml" <<'CEOF'
+services:
+  emby-in-one:
+    build: .
+    container_name: emby-in-one
+    ports:
+      - "8096:8096"
+    volumes:
+      - ./config:/app/config
+      - ./data:/app/data
+    restart: unless-stopped
+CEOF
+
+    rm -rf "${tmp_dir}"
+
+    # ── 5. 重建镜像并启动 ──
+    echo -e "  ${DIM}构建 Docker 镜像（首次可能需要数分钟）...${NC}"
     cd "${PROJECT_DIR}" && compose_cmd build --no-cache
     compose_cmd up -d
+
+    # ── 6. 同步更新 CLI 脚本自身 ──
+    if [[ -f "${PROJECT_DIR}/emby-in-one-cli.sh" ]]; then
+      cp -f "${PROJECT_DIR}/emby-in-one-cli.sh" /usr/local/bin/emby-in-one
+      chmod +x /usr/local/bin/emby-in-one
+    fi
   fi
   echo ""
   echo -e "${GREEN}✔ 服务已更新${NC}"
@@ -428,7 +518,7 @@ do_uninstall() {
     rm -rf "${PROJECT_DIR}"
   else
     echo -e "${YELLOW}▶ 保留 config/ 和 data/ 目录，删除其他文件...${NC}"
-    find "${PROJECT_DIR}" -maxdepth 1 ! -name config ! -name data ! -name log ! -name . -exec rm -rf {} +
+    find "${PROJECT_DIR}" -mindepth 1 -maxdepth 1 ! -name config ! -name data ! -name log -exec rm -rf {} +
   fi
 
   echo -e "${YELLOW}▶ 正在删除 CLI 工具...${NC}"
