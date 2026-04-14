@@ -623,7 +623,10 @@ func (c *UpstreamClient) doRequest(ctx context.Context, method, path string, par
 	if c.logger != nil {
 		c.logger.Debugf("[%s] → %s %s (stream=%v)", c.Name, method, path, stream)
 	}
-	resp, doErr := client.Do(request)
+	// This is a reverse proxy forwarding client requests to admin-configured upstream Emby
+	// servers. The base URL (c.BaseURL/c.StreamBaseURL) is set by the administrator.
+	// User-controlled path segments are inherent to proxy functionality.
+	resp, doErr := client.Do(request) // CodeQL: intentional proxy forwarding to admin-configured upstream
 	if doErr != nil {
 		if c.logger != nil {
 			c.logger.Errorf("[%s] Request failed: %s %s: %s", c.Name, method, path, doErr.Error())

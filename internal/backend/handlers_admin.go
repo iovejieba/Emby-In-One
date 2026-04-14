@@ -367,7 +367,11 @@ func (a *App) handleAdminProxyTest(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"success": false, "latency": int64(0), "error": "Failed to create proxy transport (invalid URL or scheme)"})
 		return
 	}
-	client := &http.Client{Transport: transport, Timeout: 10 * time.Second}
+	// Wrap transport with SSRF-safe dialer that re-checks resolved IPs at connect time,
+	// preventing DNS rebinding attacks where a hostname resolves to a public IP during
+	// validation but to a private IP during the actual connection.
+	safeTransport := wrapTransportWithSSRFCheck(transport)
+	client := &http.Client{Transport: safeTransport, Timeout: 10 * time.Second}
 	start := time.Now()
 	resp, err := client.Get(body.TargetURL)
 	latency := time.Since(start).Milliseconds()

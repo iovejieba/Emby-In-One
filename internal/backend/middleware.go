@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -233,4 +234,50 @@ func isPrivateOrReservedIP(host string) bool {
 		}
 	}
 	return false
+}
+
+// ssrfSafeDialer returns a DialContext function that checks resolved IP addresses
+// against private/reserved ranges before allowing the connection. This prevents
+// DNS rebinding attacks where a hostname resolves differently between validation
+// and connection time.
+func ssrfSafeDialer() func(ctx context.Context, network, addr string) (net.Conn, error) {
+	base := &net.Dialer{Timeout: 10 * time.Second}
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, fmt.Errorf("ssrf check: invalid address %q", addr)
+		}
+		ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+		if err != nil {
+			return nil, fmt.Errorf("ssrf check: DNS resolve failed for %q: %w", host, err)
+		}
+		for _, ipAddr := range ips {
+			if ipAddr.IP.IsLoopback() || ipAddr.IP.IsPrivate() || ipAddr.IP.IsLinkLocalUnicast() ||
+				ipAddr.IP.IsLinkLocalMulticast() || ipAddr.IP.IsUnspecified() {
+				return nil, fmt.Errorf("ssrf check: resolved IP %s for %q is private/reserved", ipAddr.IP, host)
+			}
+		}
+		// Connect to the first safe resolved IP directly, bypassing further DNS lookup
+		return base.DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
+	}
+}
+
+// wrapTransportWithSSRFCheck wraps an existing RoundTripper (typically a proxy transport)
+// with a SSRF-safe dialer that validates resolved IPs at connection time.
+func wrapTransportWithSSRFCheck(rt http.RoundTripper) http.RoundTripper {
+	dial := ssrfSafeDialer()
+	if t, ok := rt.(*http.Transport); ok {
+		clone := t.Clone()
+		clone.DialContext = dial
+		return clone
+	}
+	// Fallback: create a fresh transport with the safe dialer
+	return &http.Transport{
+		DialContext:           dial,
+		MaxIdleConns:          64,
+		MaxIdleConnsPerHost:   16,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:  10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
 }
