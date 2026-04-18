@@ -218,33 +218,12 @@ copy_distribution_layout() {
   return 0
 }
 
-copy_root_layout() {
-  local base="$1"
-  [[ -d "${base}/go-backend" && -d "${base}/public" ]] || return 1
-  [[ -e "${base}/go-backend/go.mod" ]] || return 1
-
-  info "从 ${base} 复制根仓库中的 Go 部署文件..."
-  copy_item "${base}/go-backend/cmd" "${PROJECT_DIR}/"
-  copy_item "${base}/go-backend/internal" "${PROJECT_DIR}/"
-  copy_item "${base}/go-backend/third_party" "${PROJECT_DIR}/"
-  copy_item "${base}/go-backend/go.mod" "${PROJECT_DIR}/"
-  for item in public README.md README_EN.md Update.md emby-in-one-cli.sh .dockerignore LICENSE; do
-    copy_item "${base}/${item}" "${PROJECT_DIR}/"
-  done
-  write_runtime_dockerfile
-  write_runtime_compose
-  return 0
-}
-
 copy_project_files_from() {
   local base="$1"
   if copy_distribution_layout "$base"; then
     return 0
   fi
   if [[ -d "${base}/Emby-In-One-Go" ]] && copy_distribution_layout "${base}/Emby-In-One-Go"; then
-    return 0
-  fi
-  if copy_root_layout "$base"; then
     return 0
   fi
   return 1
@@ -306,7 +285,9 @@ fi
 ADMIN_PASS_DISPLAY=$(format_admin_password "$ADMIN_PASS")
 
 # ── 8. 设置权限 ──
-chmod -R 755 "${PROJECT_DIR}"
+find "${PROJECT_DIR}" -type d -exec chmod 755 {} +
+find "${PROJECT_DIR}" -type f -exec chmod 644 {} +
+chmod 600 "${PROJECT_DIR}/config/config.yaml" 2>/dev/null || true
 
 # ── 9. 启动容器 ──
 info "构建并启动容器..."

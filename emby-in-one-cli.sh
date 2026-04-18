@@ -72,6 +72,20 @@ is_hashed_password() {
   [[ "$1" =~ ^[0-9a-fA-F]{32}:[0-9a-fA-F]{128}$ ]]
 }
 
+# 从 tokens.json 读取管理员 Token（无需密码登录）
+get_admin_token() {
+  local token_file="${PROJECT_DIR}/data/tokens.json"
+  [[ -f "$token_file" ]] || return 1
+  # tokens.json 由 Go json.MarshalIndent 生成，格式固定：
+  #   "hextoken": {
+  #     ...
+  #     "role": "admin",
+  awk -F'"' '
+    /^  "[0-9a-fA-F]+".*\{/ { key=$2 }
+    /"role".*"admin"/ { if (key != "") { print key; exit } }
+  ' "$token_file"
+}
+
 reset_password_via_cli() {
   local new_password="$1"
   if [[ "$DEPLOY_MODE" == "binary" ]]; then
@@ -761,7 +775,7 @@ do_user_list() {
   print_line
   echo -e "  ${BOLD}可用用户列表${NC}"
   print_line
-  echo "$result" | grep -oP '"Name"\s*:\s*"[^"]*"' | sed 's/"Name"\s*:\s*"/  /;s/"$//' | while read -r name; do
+  echo "$result" | grep -o '"Name" *: *"[^"]*"' | sed 's/.*: *"//;s/"$//' | while read -r name; do
     echo -e "  ${GREEN}●${NC} $name"
   done
   print_line
@@ -791,20 +805,13 @@ do_user_add() {
     return
   fi
 
-  # 获取管理员 token
-  local admin_user admin_pass port
-  admin_user=$(get_config_value "username")
-  admin_pass=$(get_config_value "password")
+  # 获取管理员 token（优先从 tokens.json 读取，无需密码登录）
+  local port token
   port=$(get_port)
   port=${port:-8096}
-
-  local login_result token
-  login_result=$(curl -s --max-time 5 -X POST "http://127.0.0.1:${port}/Users/AuthenticateByName" \
-    -H 'Content-Type: application/json' \
-    -d "{\"Username\":\"$(json_escape "${admin_user}")\",\"Pw\":\"$(json_escape "${admin_pass}")\"}" 2>/dev/null)
-  token=$(echo "$login_result" | grep -oP '"AccessToken"\s*:\s*"\K[^"]+')
+  token=$(get_admin_token)
   if [[ -z "$token" ]]; then
-    echo -e "${RED}[错误] 无法获取管理员令牌（密码可能已加密存储，请使用 Web 面板管理用户）${NC}"
+    echo -e "${RED}[错误] 未找到有效的管理员令牌，请先通过 Web 面板或 Emby 客户端以管理员身份登录一次${NC}"
     return
   fi
 
@@ -815,7 +822,7 @@ do_user_add() {
     -d "{\"username\":\"$(json_escape "${new_user}")\",\"password\":\"$(json_escape "${new_pass}")\"}" 2>/dev/null)
   if echo "$create_result" | grep -q '"error"'; then
     local err
-    err=$(echo "$create_result" | grep -oP '"error"\s*:\s*"\K[^"]+')
+    err=$(echo "$create_result" | grep -o '"error" *: *"[^"]*"' | head -1 | sed 's/.*: *"//;s/"$//')
     echo -e "${RED}✘ 创建失败: ${err}${NC}"
   else
     echo -e "${GREEN}✔ 用户 ${new_user} 创建成功${NC}"
@@ -840,19 +847,13 @@ do_user_delete() {
     return
   fi
 
-  local admin_user admin_pass port
-  admin_user=$(get_config_value "username")
-  admin_pass=$(get_config_value "password")
+  # 获取管理员 token（优先从 tokens.json 读取，无需密码登录）
+  local port token
   port=$(get_port)
   port=${port:-8096}
-
-  local login_result token
-  login_result=$(curl -s --max-time 5 -X POST "http://127.0.0.1:${port}/Users/AuthenticateByName" \
-    -H 'Content-Type: application/json' \
-    -d "{\"Username\":\"$(json_escape "${admin_user}")\",\"Pw\":\"$(json_escape "${admin_pass}")\"}" 2>/dev/null)
-  token=$(echo "$login_result" | grep -oP '"AccessToken"\s*:\s*"\K[^"]+')
+  token=$(get_admin_token)
   if [[ -z "$token" ]]; then
-    echo -e "${RED}[错误] 无法获取管理员令牌（密码可能已加密存储，请使用 Web 面板管理用户）${NC}"
+    echo -e "${RED}[错误] 未找到有效的管理员令牌，请先通过 Web 面板或 Emby 客户端以管理员身份登录一次${NC}"
     return
   fi
 
@@ -860,7 +861,7 @@ do_user_delete() {
   local users_result user_id
   users_result=$(curl -s --max-time 5 "http://127.0.0.1:${port}/admin/api/users" \
     -H "X-Emby-Token: ${token}" 2>/dev/null)
-  user_id=$(echo "$users_result" | grep -oP "\"id\":\"[^\"]+\",\"username\":\"${del_user}\"" | head -1 | grep -oP '(?<="id":")[^"]+')
+  user_id=$(echo "$users_result" | grep -o "\"id\":\"[^\"]*\",\"username\":\"${del_user}\"" | head -1 | sed 's/.*"id":"//;s/".*//')
   if [[ -z "$user_id" ]]; then
     echo -e "${RED}[错误] 未找到用户 ${del_user}（注意：不能删除管理员账号）${NC}"
     return
@@ -879,7 +880,7 @@ do_user_delete() {
     echo -e "${GREEN}✔ 用户 ${del_user} 已删除${NC}"
   else
     local err
-    err=$(echo "$del_result" | grep -oP '"error"\s*:\s*"\K[^"]+')
+    err=$(echo "$del_result" | grep -o '"error" *: *"[^"]*"' | head -1 | sed 's/.*: *"//;s/"$//')
     echo -e "${RED}✘ 删除失败: ${err:-未知错误}${NC}"
   fi
 }

@@ -68,7 +68,7 @@ if [[ -n "$1" ]]; then
   info "指定安装版本: ${VERSION_TAG}"
 else
   info "正在获取最新稳定版本..."
-  VERSION_TAG=$(curl -sL --max-time 15 "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" 2>/dev/null | grep -oP '"tag_name"\s*:\s*"\K[^"]+')
+  VERSION_TAG=$(curl -sL --max-time 15 "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" 2>/dev/null | grep -o '"tag_name" *: *"[^"]*"' | head -1 | sed 's/.*: *"//;s/"$//')
   if [[ -z "$VERSION_TAG" ]]; then
     error "无法获取最新版本信息，请检查网络连接。\n  如果处于 Pre-release 测试期，请指定版本安装: bash release-install.sh V1.3.0"
   fi
@@ -158,7 +158,7 @@ info "二进制文件已成功安装到 ${PROJECT_DIR}/emby-in-one"
 
 # ── 生成默认配置（仅首次安装） ──
 if [[ ! -f "${PROJECT_DIR}/config/config.yaml" ]]; then
-  ADMIN_PASS=$(head -c 12 /dev/urandom | base64 | tr -d '/+=' | head -c 16)
+  ADMIN_PASS=$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 16)
   cat > "${PROJECT_DIR}/config/config.yaml" << EOF
 server:
   port: ${DEFAULT_PORT}
