@@ -65,7 +65,7 @@ Emby连接地址：https://emby.cothx.eu.cc/
 - **网络代理池** — 可为每台上游服务器单独配置 HTTP/HTTPS 代理，内置一键连通性测试。
 - **双播放模式** — 代理模式（流量转发、隐藏上游、支持 HLS/分片）或直连模式（302 重定向至上游，节省代理带宽）。
 - **Token 管理与会话稳定** — 代理 Token 永不过期（仅在登出、改密或手动撤销时移除），防止长时间空闲设备频繁 401；上游 Token 过期时通过 30 秒防抖的异步重登录自动恢复；管理员改密后自动撤销所有已签发 Token。
-- **Passthrough 延迟登录** — passthrough 模式的上游不再在启动时使用 Infuse 身份尝试登录；而是等待真实客户端连接后再认证，避免在上游 Emby 产生虚假设备记录。
+- **Passthrough 修正** — passthrough 模式的上游不再在启动时使用 Infuse 身份尝试登录；而是等待真实客户端连接后再认证，避免在上游 Emby 产生虚假设备记录。同时**将提供UA的能力只固化给admin**。
 - **全面管控与运维** — 内置现代化 SSH CLI 菜单和 Web 管理面板；配备持久化日志和 SQLite ID 映射。SSH 菜单自动检测 Binary/Docker 部署模式，所有操作自动分发到 systemd 或 Docker Compose 对应命令。
 
 ---
@@ -83,7 +83,7 @@ curl -fsSL -o release-install.sh https://raw.githubusercontent.com/ArizeSky/Emby
 sudo bash release-install.sh
 ```
 
-可选：指定版本安装。
+可选：指定版本安装（不确定稳定性）。
 
 ```bash
 sudo bash release-install.sh V1.3.0
