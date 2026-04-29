@@ -152,6 +152,16 @@ func (a *App) handlePlaybackInfo(w http.ResponseWriter, r *http.Request) {
 							if originalMSID != "" && originalMSID != inst.OriginalID {
 								deliveryURL = strings.ReplaceAll(deliveryURL, originalMSID, virtualMSID)
 							}
+							if parsed, err := url.Parse(deliveryURL); err == nil {
+								queryValues := parsed.Query()
+								queryValues.Del("api_key")
+								queryValues.Del("ApiKey")
+								if reqCtx != nil && reqCtx.ProxyToken != "" {
+									queryValues.Set("api_key", reqCtx.ProxyToken)
+								}
+								parsed.RawQuery = queryValues.Encode()
+								deliveryURL = parsed.String()
+							}
 							stream["DeliveryUrl"] = deliveryURL
 						}
 					}

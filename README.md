@@ -1,6 +1,6 @@
 ﻿# Emby-In-One
 
-> **Version: V1.4.2**
+> **Version: V1.4.3**
 
 [![License: GPL v3](https://img.shields.io/github/license/ArizeSky/Emby-In-One?color=blue)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
@@ -74,7 +74,7 @@ Emby连接地址：https://emby.cothx.eu.cc/
 
 > **旧版 Node.js 部署说明**：如果您希望部署基于 Node.js 的 V1.2.1 稳定版，请前往本仓库的 [Releases 页面](https://github.com/ArizeSky/Emby-In-One/releases) 下载 V1.2.1 的 Source code 源码压缩包，解压后同样运行 `bash install.sh` 即可。
 
-本项目优先推荐在 Linux 服务器直接使用 Release 二进制部署 V1.4.2（无需本地编译）；Docker 方式适合希望自行构建镜像的场景。
+本项目优先推荐在 Linux 服务器直接使用 Release 二进制部署 V1.4.3（无需本地编译）；Docker 方式适合希望自行构建镜像的场景。
 
 ### 方式一：Release 二进制一键安装（首推）
 

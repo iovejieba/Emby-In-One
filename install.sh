@@ -192,7 +192,7 @@ services:
     build:
       context: .
       args:
-        VERSION: v1.4.2
+        VERSION: v1.4.3
     container_name: emby-in-one
     ports:
       - "8096:8096"
@@ -331,4 +331,3 @@ elif [[ -e "${PROJECT_DIR}/emby-in-one-cli.sh" ]]; then
 fi
 
 info "安装完成！"
-

@@ -1,5 +1,29 @@
 # Emby-In-One 更新日志
 
+## V1.4.3
+
+发布日期：2026-04-27
+
+> V1.4.3 为 V1.4.2 的补丁版本，重点修复代理模式下独立字幕流仍暴露上游 `api_key`、导致部分 Emby 客户端选择字幕后自动回退为“无字幕”的问题，并同步更新对外版本号。
+
+### Bug 修复
+
+- 修复代理模式下 `PlaybackInfo` 返回的 `MediaStreams[].DeliveryUrl` 仅重写 item / `MediaSourceId`、却保留上游 `api_key` 的问题：现在会统一替换为代理 token，避免客户端后续拉取独立字幕流时因鉴权失败而自动取消字幕选择
+- 修复 `.ass` 外挂字幕在部分 Emby 客户端中选择后立即回退为“无字幕”的问题；同类走 `/Subtitles/.../Stream.xxx` 独立字幕流链路的格式（如 `.ssa`、`.srt`、`.vtt` 等）也一并受益
+
+### 测试与验证
+
+- 已 fresh 通过以下 Go 定向测试：
+  - `go test ./internal/backend -run 'TestPlaybackInfoAndMasterPlaylistProxy|TestPlaybackInfoRewritesSubtitleDeliveryURLForASSTracks|TestSubtitlePathResolvesMediaSourceID|TestVideoStreamFailsExplicitlyWhenMediaSourceTargetServerIsUnavailable' -count=1`
+
+### 文档与版本同步
+
+- `README.md` / `README_EN.md`：当前版本与推荐部署版本同步更新为 **V1.4.3**
+- `docker-compose.yml` / `install.sh` / `emby-in-one-cli.sh`：默认构建版本与 CLI 展示版本同步更新为 **V1.4.3**
+- `Update Plan.md`：当前稳定版本同步更新为 **V1.4.3**
+
+---
+
 ## V1.4.2
 
 发布日期：2026-04-20

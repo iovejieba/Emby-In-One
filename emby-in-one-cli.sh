@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 
 # ╔══════════════════════════════════════╗
-# ║    Emby In One 管理菜单 V1.4.2       ║
+# ║    Emby In One 管理菜单 V1.4.3       ║
 # ╚══════════════════════════════════════╝
 
 PROJECT_DIR="/opt/emby-in-one"
-VERSION="1.4.2"
+VERSION="1.4.3"
 SERVICE_NAME="emby-in-one"
 GITHUB_REPO="ArizeSky/Emby-In-One"
 
@@ -254,7 +254,7 @@ services:
     build:
       context: .
       args:
-        VERSION: v1.4.2
+        VERSION: v1.4.3
     container_name: emby-in-one
     ports:
       - "8096:8096"
@@ -1005,4 +1005,3 @@ while true; do
     *) echo -e "${RED}无效选择，请重试${NC}"; pause_return ;;
   esac
 done
-
